@@ -1,6 +1,6 @@
 ﻿{
   "name": "tling-core",
-  "version-string": "0.99-beta",
+  "version-string": "0.99.1-beta",
   "dependencies": [
     {
       "name": "nlohmann-json"

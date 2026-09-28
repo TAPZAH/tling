@@ -24,6 +24,7 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -845,6 +846,46 @@ int main() {
             require(text == "hello deflate", "распаковка DEFLATE ZIP");
         }
         std::filesystem::remove_all(zip_root);
+    }
+
+    {
+        // Реальные пакеты *.argosmodel (DEFLATE от Python-ziplib). Проверка
+        // включается переменной окружения TLING_TEST_ARGOS_MODEL со списком
+        // путей через ';', чтобы ctest не зависел от больших файлов и сети.
+        if (const char* model_env = std::getenv("TLING_TEST_ARGOS_MODEL")) {
+            const std::string list(model_env);
+            std::size_t start = 0;
+            std::size_t index = 0;
+            while (start <= list.size()) {
+                const auto end = list.find(';', start);
+                const std::string path = list.substr(
+                    start,
+                    end == std::string::npos ? std::string::npos : end - start);
+                if (!path.empty()) {
+                    const auto out_dir =
+                        std::filesystem::temp_directory_path() /
+                        ("offline-translator-argos-" + std::to_string(index));
+                    std::filesystem::remove_all(out_dir);
+                    extract_zip(path, out_dir);
+                    std::size_t files = 0;
+                    for (const auto& entry :
+                         std::filesystem::recursive_directory_iterator(out_dir)) {
+                        if (entry.is_regular_file()) {
+                            ++files;
+                        }
+                    }
+                    require(files > 0, "распаковка реального пакета Argos: " + path);
+                    std::cout << "argos package: " << path << " -> " << files
+                              << " files\n";
+                    std::filesystem::remove_all(out_dir);
+                    ++index;
+                }
+                if (end == std::string::npos) {
+                    break;
+                }
+                start = end + 1;
+            }
+        }
     }
 
     {

@@ -11,7 +11,7 @@
 ; %USERPROFILE%\.local\share\offline-translator не трогается.
 
 #define AppName "TLing"
-#define AppVersion "0.99-beta"
+#define AppVersion "0.99.1-beta"
 #define AppPublisher "TAP3AH"
 #define AppExeName "TLing.exe"
 
@@ -44,7 +44,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=installer-output
-OutputBaseFilename=tling-0.99-beta{#ModelSuffix}{#BuildSuffix}-setup
+OutputBaseFilename=tling-{#AppVersion}{#ModelSuffix}{#BuildSuffix}-setup
 SetupIconFile=..\assets\app.ico
 LicenseFile=..\LICENSE
 UninstallDisplayIcon={app}\{#AppExeName}
@@ -56,11 +56,11 @@ RestartApplications=no
 ; Язык установщика определяется по языку системы; ShowLanguageDialog=yes
 ; всегда показывает выбор языка (с уже выбранным системным).
 ShowLanguageDialog=yes
-VersionInfoVersion=0.99.0.0
+VersionInfoVersion=0.99.1.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName}
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion=0.99.0.0
+VersionInfoProductVersion=0.99.1.0
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"

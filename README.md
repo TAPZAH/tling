@@ -2,11 +2,11 @@
 
 **TLing** — настольный переводчик, который работает **без интернета** и без
 облачных сервисов: все модели выполняются локально на CPU. Windows 10/11
-(x64), установщик или портативная папка. Версия **beta 0.99**, автор —
+(x64), установщик или портативная папка. Версия **beta 0.99.1**, автор —
 **TAP3AH**.
 
 **TLing** is an offline translator for Windows 10/11 (x64). Everything runs
-locally on CPU — no internet, no API keys, no telemetry. Version **beta 0.99**.
+locally on CPU — no internet, no API keys, no telemetry. Version **beta 0.99.1**.
 
 ---
 
@@ -42,12 +42,13 @@ locally on CPU — no internet, no API keys, no telemetry. Version **beta 0.99**
 
 | Файл | Что внутри |
 |------|------------|
-| `tling-0.99-beta-setup.exe` | Установщик **с языковыми моделями** (~900 МБ): сразу работает оффлайн |
-| `tling-0.99-beta-portable.zip` | Портативная папка без моделей (модели ставятся из окна «Пакеты») |
-| `tling-0.99-beta-src.zip` | Исходники |
+| `tling-0.99.1-beta-setup.exe` | Установщик без моделей (~11 МБ): модели ставятся из окна «Пакеты» |
+| `tling-0.99.1-beta-portable.zip` | Портативная папка без моделей (модели ставятся из окна «Пакеты») |
+| `tling-0.99.1-beta-src.zip` | Исходники |
 
-Полный портатив с моделями (`portable-with-models.zip`) собирается локально
-скриптом `cpp\build_release.ps1`.
+Сборки с предустановленными моделями (`setup-with-models.exe` ~900 МБ и
+`portable-with-models.zip`) собираются локально скриптом
+`cpp\build_release.ps1`.
 
 После распаковки портатива откройте `TLing.exe`. Папки `assets`, `data` и
 `licenses` удалять нельзя.

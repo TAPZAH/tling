@@ -285,7 +285,7 @@ lzma2/max). Компилятор: `ISCC.exe`
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\cpp\TLing.iss
 ```
 
-Выход: `cpp/installer-output/tling-0.99-beta-setup.exe`.
+Выход: `cpp/installer-output/tling-0.99.1-beta-setup.exe`.
 Деинсталлятор C++ удаляет `{app}` и `{app}\data`, но **не**
 `%USERPROFILE%\.local\share\offline-translator`. Автозагрузка Run
 при установке не включается. Если в профиле уже есть `settings.json`,

@@ -1,6 +1,8 @@
 ﻿#include "zip_archive.hpp"
 #include "fs_utils.hpp"
 
+#include <zlib.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -16,9 +18,6 @@ namespace {
 constexpr std::uint32_t kLocalSig = 0x04034b50;
 constexpr std::uint32_t kCentralSig = 0x02014b50;
 constexpr std::uint32_t kEocdSig = 0x06054b50;
-constexpr int kMaxBits = 15;
-constexpr int kMaxLits = 288;
-constexpr int kMaxDists = 32;
 
 std::uint16_t read_u16(const unsigned char* data) {
     return static_cast<std::uint16_t>(data[0] | (data[1] << 8));
@@ -79,263 +78,49 @@ std::vector<unsigned char> read_all(const std::filesystem::path& path) {
     return data;
 }
 
-struct Huffman {
-    std::array<int, kMaxLits> code{};
-    std::array<int, kMaxLits> length{};
-    int max_symbol = 0;
-    int min_length = kMaxBits;
-    int max_length = 0;
-};
-
-void build_huffman(Huffman& tree, const int* lengths, int n) {
-    tree.code.fill(0);
-    tree.length.fill(0);
-    tree.max_symbol = n;
-    tree.min_length = kMaxBits;
-    tree.max_length = 0;
-    std::array<int, kMaxBits + 1> count{};
-    for (int i = 0; i < n; ++i) {
-        if (lengths[i] < 0 || lengths[i] > kMaxBits) {
-            throw std::runtime_error("Некорректная длина кода Huffman");
-        }
-        tree.length[i] = lengths[i];
-        ++count[lengths[i]];
-        if (lengths[i] > 0) {
-            tree.min_length = std::min(tree.min_length, lengths[i]);
-            tree.max_length = std::max(tree.max_length, lengths[i]);
-        }
-    }
-    if (count[0] == n) {
-        tree.min_length = 0;
-        tree.max_length = 0;
-        return;
-    }
-    int left = 1;
-    for (int len = 1; len <= kMaxBits; ++len) {
-        left <<= 1;
-        left -= count[len];
-        if (left < 0) {
-            throw std::runtime_error("Переполненное дерево Huffman");
-        }
-    }
-    std::array<int, kMaxBits + 1> next_code{};
-    int code = 0;
-    for (int bits = 1; bits <= kMaxBits; ++bits) {
-        code = (code + count[bits - 1]) << 1;
-        next_code[bits] = code;
-    }
-    for (int symbol = 0; symbol < n; ++symbol) {
-        const int len = lengths[symbol];
-        if (len != 0) {
-            tree.code[symbol] = next_code[len]++;
-        }
-    }
-}
-
-class BitStream {
-public:
-    BitStream(const unsigned char* data, std::size_t size)
-        : data_(data), size_(size) {}
-
-    int get_bits(int count) {
-        while (bit_count_ < count) {
-            if (offset_ >= size_) {
-                throw std::runtime_error("Обрыв DEFLATE-потока");
-            }
-            bit_buffer_ |= static_cast<unsigned>(data_[offset_++]) << bit_count_;
-            bit_count_ += 8;
-        }
-        const int value = static_cast<int>(bit_buffer_ & ((1U << count) - 1U));
-        bit_buffer_ >>= count;
-        bit_count_ -= count;
-        return value;
-    }
-
-    int decode(const Huffman& tree) {
-        if (tree.max_length <= 0) {
-            throw std::runtime_error("Пустое дерево Huffman");
-        }
-        int acc = 0;
-        for (int len = 1; len <= tree.max_length; ++len) {
-            acc = (acc << 1) | get_bits(1);
-            if (len < tree.min_length) {
-                continue;
-            }
-            for (int symbol = 0; symbol < tree.max_symbol; ++symbol) {
-                if (tree.length[symbol] == len && tree.code[symbol] == acc) {
-                    return symbol;
-                }
-            }
-        }
-        throw std::runtime_error("Неизвестный символ Huffman");
-    }
-
-    void align_byte() {
-        bit_buffer_ = 0;
-        bit_count_ = 0;
-    }
-
-    std::size_t offset() const { return offset_; }
-
-private:
-    const unsigned char* data_;
-    std::size_t size_;
-    std::size_t offset_{0};
-    unsigned bit_buffer_{0};
-    int bit_count_{0};
-};
-
-const std::array<int, 29> kLengthExtra{
-    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
-    3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
-const std::array<int, 29> kLengthBase{
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
-    35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
-const std::array<int, 30> kDistExtra{
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
-    7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
-const std::array<int, 30> kDistBase{
-    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
-    257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193,
-    12289, 16385, 24577};
-
-void decode_codes(
-    BitStream& bits,
-    const Huffman& lit,
-    const Huffman& dist,
-    std::vector<unsigned char>& out) {
-    while (true) {
-        const int symbol = bits.decode(lit);
-        if (symbol < 256) {
-            out.push_back(static_cast<unsigned char>(symbol));
-            continue;
-        }
-        if (symbol == 256) {
-            return;
-        }
-        const int len_index = symbol - 257;
-        if (len_index < 0 || len_index >= static_cast<int>(kLengthBase.size())) {
-            throw std::runtime_error("Некорректный код длины DEFLATE");
-        }
-        int length = kLengthBase[static_cast<std::size_t>(len_index)] +
-                     bits.get_bits(kLengthExtra[static_cast<std::size_t>(len_index)]);
-        const int dist_symbol = bits.decode(dist);
-        if (dist_symbol < 0 || dist_symbol >= static_cast<int>(kDistBase.size())) {
-            throw std::runtime_error("Некорректный код дистанции DEFLATE");
-        }
-        const int distance =
-            kDistBase[static_cast<std::size_t>(dist_symbol)] +
-            bits.get_bits(kDistExtra[static_cast<std::size_t>(dist_symbol)]);
-        if (distance <= 0 || static_cast<std::size_t>(distance) > out.size()) {
-            throw std::runtime_error("Дистанция DEFLATE вне окна");
-        }
-        for (int i = 0; i < length; ++i) {
-            out.push_back(out[out.size() - static_cast<std::size_t>(distance)]);
-        }
-    }
-}
-
-void inflate_dynamic(BitStream& bits, std::vector<unsigned char>& out) {
-    const int nlit = bits.get_bits(5) + 257;
-    const int ndist = bits.get_bits(5) + 1;
-    const int ncode = bits.get_bits(4) + 4;
-    static const int order[19] = {
-        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
-    int code_lengths[19]{};
-    for (int i = 0; i < ncode; ++i) {
-        code_lengths[order[i]] = bits.get_bits(3);
-    }
-    Huffman code_tree;
-    build_huffman(code_tree, code_lengths, 19);
-    std::vector<int> lengths(static_cast<std::size_t>(nlit + ndist), 0);
-    int index = 0;
-    while (index < nlit + ndist) {
-        const int symbol = bits.decode(code_tree);
-        if (symbol < 16) {
-            lengths[static_cast<std::size_t>(index++)] = symbol;
-        } else {
-            int repeat = 0;
-            int value = 0;
-            if (symbol == 16) {
-                if (index == 0) {
-                    throw std::runtime_error("Повтор DEFLATE без предыдущей длины");
-                }
-                value = lengths[static_cast<std::size_t>(index - 1)];
-                repeat = 3 + bits.get_bits(2);
-            } else if (symbol == 17) {
-                repeat = 3 + bits.get_bits(3);
-            } else if (symbol == 18) {
-                repeat = 11 + bits.get_bits(7);
-            } else {
-                throw std::runtime_error("Неизвестный код длин DEFLATE");
-            }
-            if (index + repeat > nlit + ndist) {
-                throw std::runtime_error("Слишком много длин DEFLATE");
-            }
-            while (repeat-- > 0) {
-                lengths[static_cast<std::size_t>(index++)] = value;
-            }
-        }
-    }
-    Huffman lit;
-    Huffman dist;
-    build_huffman(lit, lengths.data(), nlit);
-    build_huffman(dist, lengths.data() + nlit, ndist);
-    decode_codes(bits, lit, dist, out);
-}
-
-void inflate_fixed(BitStream& bits, std::vector<unsigned char>& out) {
-    int lengths[kMaxLits + kMaxDists]{};
-    for (int i = 0; i <= 143; ++i) {
-        lengths[i] = 8;
-    }
-    for (int i = 144; i <= 255; ++i) {
-        lengths[i] = 9;
-    }
-    for (int i = 256; i <= 279; ++i) {
-        lengths[i] = 7;
-    }
-    for (int i = 280; i <= 287; ++i) {
-        lengths[i] = 8;
-    }
-    for (int i = 0; i < kMaxDists; ++i) {
-        lengths[kMaxLits + i] = 5;
-    }
-    Huffman lit;
-    Huffman dist;
-    build_huffman(lit, lengths, kMaxLits);
-    build_huffman(dist, lengths + kMaxLits, kMaxDists);
-    decode_codes(bits, lit, dist, out);
-}
-
+// Распаковка сырого DEFLATE-потока (метод ZIP 8) средствами zlib.
+// Раньше здесь был собственный декодер Хаффмана, который не поддерживал
+// часть корректных потоков (например, неполные деревья кодов), из-за чего
+// установка реальных пакетов Argos падала с «Неизвестный символ Huffman».
 std::vector<unsigned char> inflate_raw(
     const unsigned char* data,
     std::size_t size,
     std::size_t uncompressed_size) {
-    BitStream bits(data, size);
+    if (size > 0xFFFFFFFFULL) {
+        throw std::runtime_error("DEFLATE-поток слишком большой для распаковки");
+    }
+    z_stream stream{};
+    if (inflateInit2(&stream, -15) != Z_OK) {
+        throw std::runtime_error("Не удалось запустить распаковку DEFLATE");
+    }
     std::vector<unsigned char> out;
-    out.reserve(uncompressed_size);
-    int last = 0;
-    while (!last) {
-        last = bits.get_bits(1);
-        const int type = bits.get_bits(2);
-        if (type == 0) {
-            bits.align_byte();
-            const int len = bits.get_bits(16);
-            const int nlen = bits.get_bits(16);
-            if ((len ^ 0xFFFF) != nlen) {
-                throw std::runtime_error("Повреждён несжатый блок DEFLATE");
-            }
-            for (int i = 0; i < len; ++i) {
-                out.push_back(static_cast<unsigned char>(bits.get_bits(8)));
-            }
-        } else if (type == 1) {
-            inflate_fixed(bits, out);
-        } else if (type == 2) {
-            inflate_dynamic(bits, out);
-        } else {
-            throw std::runtime_error("Неподдерживаемый тип блока DEFLATE");
+    out.reserve(uncompressed_size > 0 ? uncompressed_size : size * 4);
+    stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(data));
+    stream.avail_in = static_cast<uInt>(size);
+    std::array<unsigned char, 65536> buffer{};
+    int status = Z_OK;
+    do {
+        stream.next_out = reinterpret_cast<Bytef*>(buffer.data());
+        stream.avail_out = static_cast<uInt>(buffer.size());
+        status = inflate(&stream, Z_NO_FLUSH);
+        if (status != Z_OK && status != Z_STREAM_END && status != Z_BUF_ERROR) {
+            const std::string detail =
+                stream.msg != nullptr ? stream.msg : "повреждённый поток";
+            inflateEnd(&stream);
+            throw std::runtime_error("Ошибка распаковки DEFLATE: " + detail);
         }
+        out.insert(
+            out.end(),
+            buffer.begin(),
+            buffer.begin() + static_cast<std::ptrdiff_t>(
+                                  buffer.size() - stream.avail_out));
+        if (status == Z_BUF_ERROR && stream.avail_in == 0) {
+            break;
+        }
+    } while (status != Z_STREAM_END);
+    inflateEnd(&stream);
+    if (status != Z_STREAM_END) {
+        throw std::runtime_error("Обрыв DEFLATE-потока");
     }
     return out;
 }
