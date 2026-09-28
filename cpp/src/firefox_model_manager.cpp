@@ -567,18 +567,22 @@ std::vector<PackageInfo> FirefoxModelManager::installed_packages(
         }
     }
     // Старый плоский каталог tiny: <root>/<from>-<to>.
-    for (const auto& entry : std::filesystem::directory_iterator(models_root)) {
-        if (!entry.is_directory()) {
-            continue;
+    std::error_code flat_error;
+    if (std::filesystem::is_directory(models_root, flat_error)) {
+        for (const auto& entry :
+             std::filesystem::directory_iterator(models_root)) {
+            if (!entry.is_directory()) {
+                continue;
+            }
+            const std::string name = entry.path().filename().string();
+            if (!name.empty() && name[0] == '_') {
+                continue;
+            }
+            if (is_architecture(name)) {
+                continue;
+            }
+            add_pair_directory(entry.path(), "tiny");
         }
-        const std::string name = entry.path().filename().string();
-        if (!name.empty() && name[0] == '_') {
-            continue;
-        }
-        if (is_architecture(name)) {
-            continue;
-        }
-        add_pair_directory(entry.path(), "tiny");
     }
     return packages;
 }

@@ -813,6 +813,19 @@ int main() {
         broken.uninstall();
         require(!broken.has_incomplete_package(),
                 "uninstall чистит _downloads");
+
+        // Каталог firefox-models может отсутствовать (чистая установка):
+        // перечисление установленных пакетов не должно бросать исключение.
+        const auto missing_root =
+            std::filesystem::temp_directory_path() /
+            "offline-translator-firefox-missing";
+        std::filesystem::remove_all(missing_root);
+        const auto none =
+            offline_translator::FirefoxModelManager::installed_packages(
+                missing_root);
+        require(
+            none.empty(),
+            "installed_packages на отсутствующем каталоге пуст");
         std::filesystem::remove_all(root);
     }
     {
