@@ -1,6 +1,10 @@
 ﻿cmake_minimum_required(VERSION 3.20)
 project(offline_translator_core LANGUAGES CXX)
 
+if (WIN32)
+    enable_language(RC)
+endif()
+
 if (POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)
 endif()
@@ -154,6 +158,7 @@ if (ENABLE_CTRANSLATE2)
     if (WIN32)
         add_executable(TLing WIN32
             app/win32_main.cpp
+            app/tling.rc
         )
     endif()
     target_include_directories(nllb_smoke

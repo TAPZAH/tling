@@ -1,0 +1,5 @@
+#include <windows.h>
+
+#define IDI_TLING 1
+
+IDI_TLING ICON "..\\..\\assets\\app.ico"

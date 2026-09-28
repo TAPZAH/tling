@@ -11,7 +11,7 @@
 ; %USERPROFILE%\.local\share\offline-translator не трогается.
 
 #define AppName "TLing"
-#define AppVersion "0.99.1-beta"
+#define AppVersion "0.99.2-beta"
 #define AppPublisher "TAP3AH"
 #define AppExeName "TLing.exe"
 
@@ -56,11 +56,11 @@ RestartApplications=no
 ; Язык установщика определяется по языку системы; ShowLanguageDialog=yes
 ; всегда показывает выбор языка (с уже выбранным системным).
 ShowLanguageDialog=yes
-VersionInfoVersion=0.99.1.0
+VersionInfoVersion=0.99.2.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName}
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion=0.99.1.0
+VersionInfoProductVersion=0.99.2.0
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -87,7 +87,7 @@ spanish.DesktopGroup=Iconos adicionales:
 spanish.LaunchApp=Iniciar {#AppName}
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:DesktopGroup}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:DesktopGroup}"
 
 [Dirs]
 Name: "{app}\data"

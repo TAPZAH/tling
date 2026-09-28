@@ -1737,6 +1737,36 @@ HICON load_tray_icon() {
     return create_generated_icon();
 }
 
+constexpr int kAppIconResourceId = 1;
+
+HICON load_window_icon(int size) {
+    if (HMODULE module = GetModuleHandleW(nullptr)) {
+        if (HICON icon = static_cast<HICON>(LoadImageW(
+                module,
+                MAKEINTRESOURCEW(kAppIconResourceId),
+                IMAGE_ICON,
+                size,
+                size,
+                0))) {
+            return icon;
+        }
+    }
+    const std::wstring path = find_app_icon_path();
+    if (!path.empty()) {
+        HICON icon = static_cast<HICON>(LoadImageW(
+            nullptr,
+            path.c_str(),
+            IMAGE_ICON,
+            size,
+            size,
+            LR_LOADFROMFILE));
+        if (icon) {
+            return icon;
+        }
+    }
+    return create_generated_icon();
+}
+
 void refresh_tray_icon() {
     HICON next = load_tray_icon();
     if (g_tray_icon) {
@@ -5853,6 +5883,7 @@ int WINAPI wWinMain(
     window_class.hInstance = instance;
     window_class.lpfnWndProc = window_proc;
     window_class.lpszClassName = class_name;
+    window_class.hIcon = load_window_icon(GetSystemMetrics(SM_CXICON));
     window_class.hCursor = LoadCursorW(
         nullptr,
         MAKEINTRESOURCEW(IDC_ARROW));
