@@ -1,7 +1,8 @@
-﻿# Build-артефакты C++ (кэши CMake/MSVC, портативы, установщик)
+# Build-артефакты C++ (кэши CMake/MSVC, портативы, установщик)
 cpp/build-*/
-cpp/portable*/
 cpp/portable/
+cpp/portable-lite/
+cpp/portable-full/
 cpp/installer-output/
 
 # Rust-артефакты моста fxtranslate

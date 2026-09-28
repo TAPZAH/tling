@@ -1,8 +1,10 @@
-﻿; Единый установщик TLing (C++ Win32) — с языковыми
-; моделями (та же начинка, что у портатива portable-full).
-; Соберите full-папку:
-;   powershell -File cpp\package_win32.ps1 -IncludeModels
-; Компиляция: ISCC.exe cpp\TLing.iss
+﻿; Установщик TLing (C++ Win32).
+; По умолчанию — БЕЗ языковых моделей (папка portable-lite):
+;   powershell -File cpp\package_win32.ps1 -OutputDir cpp\portable-lite
+;   ISCC.exe cpp\TLing.iss
+; Полная сборка с моделями (папка portable-full, флаг USE_FULL_PORTABLE):
+;   powershell -File cpp\package_win32.ps1 -OutputDir cpp\portable-full -IncludeModels
+;   ISCC.exe /DUSE_FULL_PORTABLE cpp\TLing.iss
 ;
 ; Деинсталлятор удаляет файлы из {app}, включая {app}\data (модели,
 ; скачанные в каталог программы). Каталог
@@ -12,7 +14,6 @@
 #define AppVersion "0.99-beta"
 #define AppPublisher "TAP3AH"
 #define AppExeName "TLing.exe"
-#define PortableDir "portable-full"
 
 ; Тестовая сборка (ISCC /DRESET_USER_STATE): гасит старые экземпляры,
 ; удаляет прежние настройки и пишет отчёт в data\install-test.log.
@@ -20,6 +21,15 @@
 #define BuildSuffix "-test"
 #else
 #define BuildSuffix ""
+#endif
+
+; Полная сборка с моделями: ISCC /DUSE_FULL_PORTABLE
+#ifdef USE_FULL_PORTABLE
+#define PortableDir "portable-full"
+#define ModelSuffix "-with-models"
+#else
+#define PortableDir "portable-lite"
+#define ModelSuffix ""
 #endif
 
 [Setup]
@@ -34,7 +44,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=installer-output
-OutputBaseFilename=tling-0.99-beta{#BuildSuffix}-setup
+OutputBaseFilename=tling-0.99-beta{#ModelSuffix}{#BuildSuffix}-setup
 SetupIconFile=..\assets\app.ico
 LicenseFile=..\LICENSE
 UninstallDisplayIcon={app}\{#AppExeName}
