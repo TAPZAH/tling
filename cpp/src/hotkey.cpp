@@ -1,4 +1,4 @@
-#include "offline_translator/hotkey.hpp"
+﻿#include "offline_translator/hotkey.hpp"
 
 #include <cctype>
 #include <sstream>

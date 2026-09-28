@@ -1,4 +1,4 @@
-#include "offline_translator/language_store.hpp"
+﻿#include "offline_translator/language_store.hpp"
 
 #include "offline_translator/selection.hpp"
 

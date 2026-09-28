@@ -1,4 +1,4 @@
-#include "offline_translator/app_settings.hpp"
+﻿#include "offline_translator/app_settings.hpp"
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/window_policy.hpp"
@@ -120,8 +120,8 @@ void test_packaging() {
         std::cout << "skip packaging: не найден каталог cpp/\n";
         return;
     }
-    const auto package_dir = cpp_root / "portable-win32-lite";
-    const auto exe = package_dir / "offline_translator_win32.exe";
+    const auto package_dir = cpp_root / "portable-lite";
+    const auto exe = package_dir / "TLing.exe";
     if (!std::filesystem::is_regular_file(exe)) {
         std::cout << "skip packaging: нет " << package_dir.string() << "\n";
         return;

@@ -1,4 +1,4 @@
-#include "offline_translator/ctranslate2_engine.hpp"
+﻿#include "offline_translator/ctranslate2_engine.hpp"
 
 #include "offline_translator/app_log.hpp"
 #include "offline_translator/nllb_language.hpp"

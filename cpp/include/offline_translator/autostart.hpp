@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <filesystem>
 #include <optional>
@@ -8,9 +8,9 @@
 namespace offline_translator {
 
 // Боевое имя значения Run. Тесты обязаны использовать kAutostartTestValueName.
-inline constexpr std::wstring_view kAutostartValueName = L"OfflineTranslator";
+inline constexpr std::wstring_view kAutostartValueName = L"TLing";
 inline constexpr std::wstring_view kAutostartTestValueName =
-    L"OfflineTranslatorCppTest";
+    L"TLingTest";
 inline constexpr std::wstring_view kAutostartRunKey =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 

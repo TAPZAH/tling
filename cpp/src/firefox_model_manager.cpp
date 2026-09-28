@@ -1,4 +1,4 @@
-#include "offline_translator/firefox_model_manager.hpp"
+﻿#include "offline_translator/firefox_model_manager.hpp"
 
 #include "offline_translator/app_log.hpp"
 #include "compression.hpp"

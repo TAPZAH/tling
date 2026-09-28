@@ -1,4 +1,4 @@
-#include "offline_translator/translation_service.hpp"
+﻿#include "offline_translator/translation_service.hpp"
 
 #include <stdexcept>
 #include <utility>

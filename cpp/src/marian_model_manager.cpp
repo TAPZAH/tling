@@ -1,4 +1,4 @@
-#include "offline_translator/marian_model_manager.hpp"
+﻿#include "offline_translator/marian_model_manager.hpp"
 
 #include "file_transfer.hpp"
 #include "fs_utils.hpp"

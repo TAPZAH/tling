@@ -1,8 +1,11 @@
-#include "offline_translator/app_log.hpp"
+﻿#include "offline_translator/app_log.hpp"
 #include "offline_translator/app_settings.hpp"
+#include "offline_translator/app_language.hpp"
+#include "offline_translator/app_update.hpp"
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/autostart.hpp"
 #include "offline_translator/clipboard.hpp"
+#include "offline_translator/clipboard_history.hpp"
 #include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
 #include "offline_translator/language_store.hpp"
@@ -856,6 +859,10 @@ int main() {
         require(missing.source_language == "en", "язык источника по умолчанию");
         require(missing.target_language == "ru", "язык перевода по умолчанию");
         require(missing.ui_theme == "light", "тема по умолчанию light");
+        require(!missing.auto_copy_selection, "автокопирование по умолчанию выкл");
+        require(
+            missing.clipboard_history_limit == 10,
+            "история по умолчанию 10");
         fs_utils::write_text_file(
             path,
             "{\n  \"engine\": \"argos\",\n  \"architecture\": \"tiny\",\n"
@@ -941,6 +948,21 @@ int main() {
         require(
             normalize_ui_theme("dark") == "dark",
             "dark нормализуется");
+        loaded.auto_copy_selection = true;
+        loaded.clipboard_history_limit = 7;
+        save_settings(path, loaded);
+        const auto copy_roundtrip = load_settings(path);
+        require(
+            copy_roundtrip.auto_copy_selection,
+            "auto_copy_selection сохраняется");
+        require(
+            copy_roundtrip.clipboard_history_limit == 7,
+            "clipboard_history_limit сохраняется");
+        loaded.clipboard_history_limit = 99;
+        save_settings(path, loaded);
+        require(
+            load_settings(path).clipboard_history_limit == 50,
+            "clipboard_history_limit ограничивается 50");
         {
             std::ifstream in(path);
             raw.assign(
@@ -1120,6 +1142,25 @@ int main() {
     }
 
     {
+        // Неудачный захват с keep_in_clipboard не оставляет служебную
+        // метку и возвращает прежний буфер.
+        MemoryClipboard clipboard;
+        clipboard.set_text(L"previous text");
+        const auto failed = capture_selected_text(
+            clipboard,
+            []() {},
+            L"__sentinel__",
+            true);
+        require(failed.empty(), "неудачный захват возвращает пусто");
+        require(
+            clipboard.get_text() != L"__sentinel__",
+            "служебная метка не остаётся в буфере");
+        require(
+            clipboard.get_text() == L"previous text",
+            "прежний буфер восстановлен после неудачи");
+    }
+
+    {
         MemoryClipboard clipboard;
         clipboard.set_text(L"user clipboard");
         const auto captured = capture_selected_text(
@@ -1130,6 +1171,17 @@ int main() {
         require(
             clipboard.get_text() == L"user clipboard",
             "буфер пользователя восстановлен");
+        clipboard.set_text(L"user clipboard");
+        const auto kept = capture_selected_text(
+            clipboard,
+            [&clipboard]() { clipboard.set_text(L"keep selected"); },
+            L"__ot_sel_test__",
+            true);
+        require(kept == L"keep selected", "захват с автокопированием");
+        require(
+            clipboard.get_text() == L"keep selected",
+            "автокопирование оставляет выделение в буфере");
+        clipboard.set_text(L"user clipboard");
         const auto empty = capture_selected_text(
             clipboard,
             []() {},
@@ -1167,6 +1219,96 @@ int main() {
             "disarm не затирает буфер пользователя");
     }
 
+    {
+        const auto history_dir =
+            std::filesystem::temp_directory_path() /
+            "offline-translator-history-test";
+        std::filesystem::remove_all(history_dir);
+        std::filesystem::create_directories(history_dir);
+        const auto path = history_dir / "clipboard_history.json";
+        require(
+            normalize_clipboard_history_limit(0) == 1,
+            "нижняя граница истории");
+        require(
+            normalize_clipboard_history_limit(99) == 50,
+            "верхняя граница истории");
+        add_clipboard_history_item(path, "один", 3);
+        add_clipboard_history_item(path, "два", 3);
+        add_clipboard_history_item(path, "три", 3);
+        add_clipboard_history_item(path, "четыре", 3);
+        auto items = load_clipboard_history(path);
+        require(items.size() == 3, "история обрезается по лимиту");
+        require(items[0] == "четыре" && items[2] == "два", "новые сверху");
+        add_clipboard_history_item(path, "два", 3);
+        items = load_clipboard_history(path);
+        require(items[0] == "два", "повтор поднимается вверх");
+        require(
+            clipboard_history_preview("  a\n b  ") == "a b",
+            "превью сжимает пробелы");
+        clear_clipboard_history(path);
+        require(load_clipboard_history(path).empty(), "очистка истории");
+        std::filesystem::remove_all(history_dir);
+    }
+
+    {
+        require(
+            parse_version("v0.995-beta") == parse_version("0.995-beta"),
+            "v и без v совпадают");
+        require(
+            parse_version("beta 0.995") == parse_version("0.995-beta"),
+            "подпись beta 0.995 совпадает с тегом");
+        require(
+            version_is_newer("0.996-beta", "0.995-beta"),
+            "0.996-beta новее");
+        require(
+            version_is_newer("0.995", "0.995-beta"),
+            "релиз новее beta");
+        require(
+            !version_is_newer("0.995-beta", "0.995-beta"),
+            "та же версия не новее");
+        GithubRelease release;
+        release.tag = "v1.0.0";
+        release.assets = {
+            {"offline-translator-1.0.0-src.zip", "http://x/src", 1},
+            {"offline-translator-1.0.0-portable-with-models.zip", "http://x/full", 2},
+            {"offline-translator-1.0.0-portable.zip", "http://x/port", 3},
+            {"offline-translator-1.0.0-setup.exe", "http://x/setup", 4},
+        };
+        const auto* portable = choose_asset(release, InstallKind::portable);
+        require(
+            portable && portable->name.find("portable.zip") != std::string::npos,
+            "портатив без моделей");
+        const auto* setup = choose_asset(release, InstallKind::installer);
+        require(
+            setup && setup->name.find("setup.exe") != std::string::npos,
+            "установщик setup.exe");
+        const auto parsed = parse_github_releases(
+            R"([{"tag_name":"v0.1.0","draft":false,"assets":[]},
+                {"tag_name":"v0.2.0","draft":true,"assets":[]}])");
+        require(parsed.size() == 1 && parsed[0].tag == "v0.1.0", "черновик пропускается");
+        {
+            const auto extract_dir =
+                std::filesystem::temp_directory_path() / "ot-update-extract-test";
+            std::filesystem::remove_all(extract_dir);
+            const auto payload_dir = extract_dir / "payload";
+            std::filesystem::create_directories(payload_dir);
+            const auto exe_path = payload_dir / "TLing.exe";
+            {
+                std::ofstream out(exe_path, std::ios::binary);
+                out << "exe";
+            }
+            const auto zip_path = extract_dir / "portable.zip";
+            write_store_zip(zip_path, {{"TLing.exe", exe_path}});
+            const auto unpacked = extract_portable_payload(
+                zip_path,
+                "TLing.exe");
+            require(
+                std::filesystem::is_regular_file(unpacked / "TLing.exe"),
+                "распаковка находит exe");
+            std::filesystem::remove_all(extract_dir);
+        }
+    }
+
 #ifdef _WIN32
     {
         const auto real_before = get_run_value(kAutostartValueName);
@@ -1181,12 +1323,12 @@ int main() {
         delete_run_value(kAutostartTestValueName);
         const std::wstring command =
             autostart_command_for_exe(
-                std::filesystem::path(L"C:\\fake\\offline_translator_win32.exe"));
+                std::filesystem::path(L"C:\\fake\\TLing.exe"));
         require(
             command.find(L"--minimized") != std::wstring::npos,
             "команда автозапуска содержит --minimized");
         require(
-            command.find(L"offline_translator_win32.exe") != std::wstring::npos,
+            command.find(L"TLing.exe") != std::wstring::npos,
             "команда автозапуска содержит exe");
         set_autostart(true, kAutostartTestValueName, command);
         require(
@@ -1202,9 +1344,54 @@ int main() {
         const auto real_after = get_run_value(kAutostartValueName);
         require(
             real_before == real_after,
-            "тест не должен менять значение OfflineTranslator");
+            "тест не должен менять значение TLing");
     }
 #endif
+
+    {
+        // Язык интерфейса: нормализация, определение и перевод строк.
+        const auto& options = ui_language_options();
+        require(options.size() == 5, "пять языков интерфейса");
+        std::set<std::string> codes;
+        for (const auto& option : options) {
+            codes.insert(option.code);
+        }
+        for (const auto expected : {"ru", "en", "de", "fr", "es"}) {
+            require(
+                codes.count(expected) == 1,
+                std::string("язык интерфейса доступен: ") + expected);
+        }
+        require(
+            codes.count("uk") == 0,
+            "украинский больше не поддерживается");
+        require(
+            normalize_ui_language("auto") == detect_ui_language(),
+            "auto нормализуется в язык системы");
+        require(
+            normalize_ui_language("") == detect_ui_language(),
+            "пустой код — язык системы");
+        require(normalize_ui_language("de") == "de", "известный код сохраняется");
+        require(
+            codes.count(normalize_ui_language("zz")) == 1,
+            "неизвестный код заменяется поддерживаемым");
+
+        set_ui_language("ru");
+        require(tr(L"Настройки") == L"Настройки", "русский — исходная строка");
+        set_ui_language("en");
+        require(tr(L"Настройки") == L"Settings", "английский перевод настроек");
+        require(tr(L"Отмена") == L"Cancel", "английский перевод отмены");
+        require(
+            tr(L"Неизвестная строка") == L"Неизвестная строка",
+            "неизвестный ключ не переводится");
+        set_ui_language("de");
+        require(tr(L"Настройки") == L"Einstellungen", "немецкий перевод");
+        set_ui_language("uk");
+        require(
+            codes.count(current_ui_language()) == 1,
+            "украинский код заменяется поддерживаемым языком");
+        set_ui_language("ru");
+        require(tr(L"Сохранить") == L"Сохранить", "возврат к русскому");
+    }
 
     const auto user_nllb = NllbModelManager::default_models_root();
     NllbModelManager real_nllb(user_nllb);

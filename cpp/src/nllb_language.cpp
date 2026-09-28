@@ -1,4 +1,4 @@
-#include "offline_translator/nllb_language.hpp"
+﻿#include "offline_translator/nllb_language.hpp"
 
 #include <map>
 #include <stdexcept>

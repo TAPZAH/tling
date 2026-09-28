@@ -1,6 +1,6 @@
 ﻿# Проверяет lite-портативную папку: exe, DLL, иконка, лицензии, без кэша сборки.
 param(
-    [string]$PackageDir = "$PSScriptRoot\portable-win32-lite",
+    [string]$PackageDir = "$PSScriptRoot\portable-lite",
     [switch]$AllowPdb
 )
 
@@ -33,7 +33,7 @@ function Test-RequiredLayout {
     param([string]$Directory)
 
     $required = @(
-        "offline_translator_win32.exe",
+        "TLing.exe",
         "ctranslate2.dll",
         "openblas.dll",
         "libprotobuf.dll",

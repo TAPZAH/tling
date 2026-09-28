@@ -1,6 +1,6 @@
-{
-  "name": "offline-translator-core",
-  "version-string": "0.995-beta",
+﻿{
+  "name": "tling-core",
+  "version-string": "0.99-beta",
   "dependencies": [
     {
       "name": "nlohmann-json"

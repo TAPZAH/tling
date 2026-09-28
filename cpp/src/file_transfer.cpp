@@ -1,4 +1,4 @@
-#include "file_transfer.hpp"
+﻿#include "file_transfer.hpp"
 #include "fs_utils.hpp"
 #include "offline_translator/app_log.hpp"
 

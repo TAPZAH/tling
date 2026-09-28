@@ -1,4 +1,4 @@
-#include "offline_translator/clipboard.hpp"
+﻿#include "offline_translator/clipboard.hpp"
 
 #include <cstring>
 #include <stdexcept>
@@ -48,7 +48,8 @@ bool ClipboardRestorer::armed() const noexcept {
 std::wstring capture_selected_text(
     Clipboard& clipboard,
     const std::function<void()>& copy_selection,
-    std::wstring_view sentinel) {
+    std::wstring_view sentinel,
+    bool keep_in_clipboard) {
     ClipboardRestorer restorer(clipboard);
     try {
         clipboard.set_text(sentinel);
@@ -89,6 +90,9 @@ std::wstring capture_selected_text(
             current != restorer.previous_text()) {
             restorer.disarm();
         }
+        if (keep_in_clipboard) {
+            restorer.disarm();
+        }
         return selected;
     } catch (...) {
         return {};
@@ -107,11 +111,13 @@ HWND clipboard_owner(void* owner_hwnd) {
 }
 
 bool open_clipboard_retry(HWND owner) {
-    for (int attempt = 0; attempt < 8; ++attempt) {
+    // Дольше ждём буфер: его может держать другая программа (менеджеры
+    // буфера, Telegram и т.п.), тогда как раньше сдавались через 80 мс.
+    for (int attempt = 0; attempt < 20; ++attempt) {
         if (OpenClipboard(owner)) {
             return true;
         }
-        Sleep(10);
+        Sleep(25);
     }
     return false;
 }
@@ -173,21 +179,13 @@ void Win32Clipboard::set_text(std::wstring_view text) {
     }
 }
 
-void send_copy_keyboard_shortcut() {
-    const bool ctrl_already_down =
-        (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-    send_copy_keyboard_shortcut(ctrl_already_down);
-}
-
-void send_copy_keyboard_shortcut(bool ctrl_already_down) {
-    // Если Ctrl уже удерживается, только нажимаем C. Отпускать Ctrl нельзя:
-    // это ломает Ctrl+V и обычное копирование.
+void send_keyboard_shortcut(WORD vk, bool ctrl_already_down) {
     if (ctrl_already_down) {
         INPUT inputs[2]{};
         inputs[0].type = INPUT_KEYBOARD;
-        inputs[0].ki.wVk = 'C';
+        inputs[0].ki.wVk = vk;
         inputs[1].type = INPUT_KEYBOARD;
-        inputs[1].ki.wVk = 'C';
+        inputs[1].ki.wVk = vk;
         inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
         SendInput(2, inputs, sizeof(INPUT));
         return;
@@ -196,14 +194,34 @@ void send_copy_keyboard_shortcut(bool ctrl_already_down) {
     inputs[0].type = INPUT_KEYBOARD;
     inputs[0].ki.wVk = VK_CONTROL;
     inputs[1].type = INPUT_KEYBOARD;
-    inputs[1].ki.wVk = 'C';
+    inputs[1].ki.wVk = vk;
     inputs[2].type = INPUT_KEYBOARD;
-    inputs[2].ki.wVk = 'C';
+    inputs[2].ki.wVk = vk;
     inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
     inputs[3].type = INPUT_KEYBOARD;
     inputs[3].ki.wVk = VK_CONTROL;
     inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(4, inputs, sizeof(INPUT));
+}
+
+void send_copy_keyboard_shortcut() {
+    const bool ctrl_already_down =
+        (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    send_copy_keyboard_shortcut(ctrl_already_down);
+}
+
+void send_copy_keyboard_shortcut(bool ctrl_already_down) {
+    send_keyboard_shortcut('C', ctrl_already_down);
+}
+
+void send_paste_keyboard_shortcut() {
+    const bool ctrl_already_down =
+        (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    send_paste_keyboard_shortcut(ctrl_already_down);
+}
+
+void send_paste_keyboard_shortcut(bool ctrl_already_down) {
+    send_keyboard_shortcut('V', ctrl_already_down);
 }
 
 namespace {
@@ -222,7 +240,9 @@ void set_capture_wait_hook(void (*hook)(std::uint32_t milliseconds)) {
     g_capture_wait_hook = hook;
 }
 
-std::wstring capture_selected_text_win32(void* owner_hwnd) {
+std::wstring capture_selected_text_win32(
+    void* owner_hwnd,
+    bool keep_in_clipboard) {
     Win32Clipboard clipboard(owner_hwnd);
     ClipboardRestorer restorer(clipboard);
     const bool copy_or_paste_now =
@@ -265,10 +285,16 @@ std::wstring capture_selected_text_win32(void* owner_hwnd) {
         selected.erase(0, begin);
     }
     if (selected.empty() || selected == sentinel) {
+        // Неудачный захват: не оставляем служебную метку в буфере
+        // пользователя — возвращаем прежнее содержимое.
+        try {
+            clipboard.set_text(restorer.previous_text());
+        } catch (...) {
+        }
         return {};
     }
     // Если пользователь в этот момент копирует, оставляем его буфер.
-    if ((GetAsyncKeyState('C') & 0x8000) != 0) {
+    if ((GetAsyncKeyState('C') & 0x8000) != 0 || keep_in_clipboard) {
         restorer.disarm();
     }
     return selected;

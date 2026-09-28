@@ -1,4 +1,4 @@
-#include "offline_translator/firefox_engine.hpp"
+﻿#include "offline_translator/firefox_engine.hpp"
 
 #include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/route_planner.hpp"

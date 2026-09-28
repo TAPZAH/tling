@@ -1,4 +1,4 @@
-#include "offline_translator/selection.hpp"
+﻿#include "offline_translator/selection.hpp"
 
 #include <map>
 #include <string>

@@ -1,4 +1,6 @@
-#include "offline_translator/app_settings.hpp"
+﻿#include "offline_translator/app_settings.hpp"
+#include "offline_translator/app_language.hpp"
+#include "offline_translator/clipboard_history.hpp"
 #include "offline_translator/hotkey.hpp"
 #include "offline_translator/selection.hpp"
 
@@ -109,6 +111,19 @@ std::string read_architecture(const nlohmann::json& data) {
     return "tiny";
 }
 
+std::string read_ui_language(const nlohmann::json& data) {
+    const auto language = read_string(data, "ui_language", "auto");
+    if (language == "auto") {
+        return language;
+    }
+    for (const auto& option : ui_language_options()) {
+        if (language == option.code) {
+            return language;
+        }
+    }
+    return "auto";
+}
+
 std::string read_result_window_mode(const nlohmann::json& data) {
     const auto mode = read_string(
         data,
@@ -207,7 +222,15 @@ AppSettings load_settings(const std::filesystem::path& path) {
         settings.result_window_mode = read_result_window_mode(data);
         settings.translate_hotkey = read_translate_hotkey(data);
         settings.architecture = read_architecture(data);
+        settings.ui_language = read_ui_language(data);
         settings.ui_theme = read_ui_theme(data);
+        settings.auto_copy_selection =
+            read_bool(data, "auto_copy_selection", false);
+        settings.clipboard_history_limit = normalize_clipboard_history_limit(
+            read_int(
+                data,
+                "clipboard_history_limit",
+                kDefaultClipboardHistoryLimit));
     } catch (...) {
         return AppSettings{};
     }
@@ -247,7 +270,11 @@ void save_settings(
     if (settings.architecture == "tiny" || settings.architecture == "base") {
         data["architecture"] = settings.architecture;
     }
+    data["ui_language"] = settings.ui_language;
     data["ui_theme"] = normalize_ui_theme(settings.ui_theme);
+    data["auto_copy_selection"] = settings.auto_copy_selection;
+    data["clipboard_history_limit"] =
+        normalize_clipboard_history_limit(settings.clipboard_history_limit);
     fs_utils::write_text_file(path, data.dump(2) + "\n");
 }
 

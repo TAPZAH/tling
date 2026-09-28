@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "offline_translator/translation_application.hpp"
 
@@ -30,8 +30,12 @@ struct AppSettings {
     std::string translate_hotkey{"Ctrl+Shift+T"};
     // Размер моделей Firefox Translations: tiny | base (как в Python).
     std::string architecture{"tiny"};
+    // Язык интерфейса: auto | ru | en | de | fr | es | uk.
+    std::string ui_language{"auto"};
     // light | dark — оформление окна перевода, меню и иконок.
     std::string ui_theme{"light"};
+    bool auto_copy_selection{false};
+    int clipboard_history_limit{10};
 };
 
 inline constexpr std::string_view kUiThemeLight = "light";

@@ -1,9 +1,12 @@
-#include "offline_translator/app_log.hpp"
+﻿#include "offline_translator/app_log.hpp"
+#include "offline_translator/app_language.hpp"
 #include "offline_translator/app_settings.hpp"
+#include "offline_translator/app_update.hpp"
 #include "offline_translator/app_version.hpp"
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/autostart.hpp"
 #include "offline_translator/clipboard.hpp"
+#include "offline_translator/clipboard_history.hpp"
 #include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
@@ -23,6 +26,7 @@
 #include <shellapi.h>
 #include <commctrl.h>
 #include <gdiplus.h>
+#include <dwmapi.h>
 #include <uxtheme.h>
 
 #pragma comment(lib, "gdiplus.lib")
@@ -39,7 +43,9 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <unordered_map>
 #include <stdexcept>
 #include <fstream>
 #include <string>
@@ -57,6 +63,8 @@ constexpr UINT kPackageIndexMessage = WM_APP + 5;
 constexpr UINT kTrayMessage = WM_APP + 10;
 constexpr UINT kSelectionResultMessage = WM_APP + 11;
 constexpr UINT kRecoverInputMessage = WM_APP + 20;
+constexpr UINT kUpdateCheckDoneMessage = WM_APP + 21;
+constexpr UINT kUpdateInstallDoneMessage = WM_APP + 22;
 constexpr UINT kSelectionPollTimer = 1;
 constexpr UINT kSelectionButtonHideTimer = 2;
 constexpr int kEngineCombo = 1001;
@@ -86,12 +94,36 @@ constexpr int kSettingsPopupModifier = 1209;
 constexpr int kSettingsOnlyCtrlCC = 1210;
 constexpr int kSettingsThemeLight = 1211;
 constexpr int kSettingsThemeDark = 1212;
+constexpr int kSettingsAutoCopy = 1213;
+constexpr int kSettingsHistoryLimit = 1214;
+constexpr int kSettingsCheckUpdate = 1215;
+constexpr int kSettingsInstallUpdate = 1216;
+constexpr int kSettingsOpenReleases = 1217;
+constexpr int kSettingsNavLanguages = 1218;
+constexpr int kSettingsNavBehavior = 1219;
+constexpr int kSettingsNavThemes = 1220;
+constexpr int kSettingsNavLanguage = 1221;
+constexpr int kSettingsNavAbout = 1222;
+constexpr int kSettingsPackagesButton = 1226;
+constexpr int kSettingsEngineCombo = 1227;
+constexpr int kSettingsUiLanguage = 1228;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
+constexpr int kResultReplaceButton = 1304;
 constexpr int kShowWindowHotkey = 2001;
 constexpr int kTrayOpen = 3001;
 constexpr int kTrayAutostart = 3002;
 constexpr int kTrayExit = 3003;
+constexpr int kTrayCheckUpdate = 3004;
+constexpr int kTrayAutoCopy = 3005;
+constexpr int kTrayHistoryRoot = 3097;
+constexpr int kTrayHistoryEmpty = 3098;
+constexpr int kTrayHistoryClear = 3099;
+constexpr int kTrayHistoryFirst = 3100;
+constexpr int kTrayHistoryLast = 3149;
+constexpr int kTrayHistoryTranslateFirst = 3200;
+constexpr int kTrayHistoryTranslateLast = 3249;
+constexpr int kTrayHistoryPreviewFirst = 3300;
 constexpr int kDefaultWindowWidth = 560;
 constexpr int kDefaultWindowHeight = 450;
 constexpr int kMinWindowWidth = 520;
@@ -111,7 +143,9 @@ HWND g_package_install = nullptr;
 HWND g_package_uninstall = nullptr;
 HWND g_package_status = nullptr;
 HWND g_package_search = nullptr;
+HWND g_packages_parent = nullptr;
 HWND g_package_arch_caption = nullptr;
+HWND g_package_caption = nullptr;
 HWND g_package_arch_combo = nullptr;
 HWND g_settings_popup_ctrl = nullptr;
 HWND g_settings_popup_modifier = nullptr;
@@ -123,10 +157,26 @@ HWND g_settings_autostart = nullptr;
 HWND g_settings_hotkey_edit = nullptr;
 HWND g_settings_theme_light = nullptr;
 HWND g_settings_theme_dark = nullptr;
+HWND g_settings_auto_copy = nullptr;
+HWND g_settings_history_limit = nullptr;
+HWND g_settings_check_update = nullptr;
+HWND g_settings_install_update = nullptr;
+HWND g_settings_open_releases = nullptr;
+HWND g_settings_update_status = nullptr;
+HWND g_settings_engine_combo = nullptr;
+HWND g_settings_ui_language = nullptr;
+std::atomic<bool> g_update_busy{false};
+std::optional<offline_translator::UpdateInfo> g_pending_update;
 HWND g_selection_button = nullptr;
 HWND g_result_popup = nullptr;
 HWND g_popup_result_edit = nullptr;
 HWND g_popup_copy_button = nullptr;
+HWND g_popup_replace_button = nullptr;
+HWND g_popup_header = nullptr;
+std::wstring g_last_clipboard_error;
+HMENU g_tray_history_popup = nullptr;
+std::vector<std::wstring> g_tray_history_items;
+std::vector<std::wstring> g_tray_history_labels;
 bool g_button_uses_icon = false;
 constexpr int kSelectionIconSize = 40;
 
@@ -156,6 +206,18 @@ std::uint64_t g_app_start_tick = 0;
 struct StatusPayload {
     std::wstring text;
     bool failed{false};
+};
+
+struct UpdateCheckPayload {
+    std::wstring text;
+    std::optional<offline_translator::UpdateInfo> info;
+    bool failed{false};
+};
+
+struct UpdateInstallPayload {
+    std::wstring text;
+    bool failed{false};
+    bool quit{false};
 };
 
 void sel_log(const std::string& line);
@@ -203,10 +265,12 @@ struct SelectionMonitor {
     POINT press_origin{};
     double press_time{0};
     double last_up_time{0};
+    double last_capture_time{0};
     double last_ctrl_c_time{0};
     bool pending_ctrl_c_c{false};
     double ctrl_c_c_ready_at{0};
     std::wstring selected_text;
+    HWND replace_hwnd{nullptr};
 };
 
 SelectionMonitor g_selection;
@@ -292,6 +356,18 @@ std::wstring executable_directory() {
     return separator == std::wstring::npos ? L"." : path.substr(0, separator);
 }
 
+std::filesystem::path executable_path() {
+    std::array<wchar_t, MAX_PATH> buffer{};
+    const DWORD length = GetModuleFileNameW(
+        nullptr,
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) {
+        return {};
+    }
+    return std::filesystem::path(std::wstring(buffer.data(), length));
+}
+
 std::wstring model_root(bool use_nllb) {
     const std::wstring portable_root = executable_directory() + L"\\data\\" +
         (use_nllb ? L"nllb-200" : L"argos-packages");
@@ -345,6 +421,159 @@ std::filesystem::path model_root_for_kind(
 std::wstring clipboard_text() {
     offline_translator::Win32Clipboard clipboard;
     return clipboard.get_text();
+}
+
+void hide_result_popup();
+
+void copy_text_to_clipboard(HWND owner, const std::wstring& text) {
+    if (text.empty()) {
+        return;
+    }
+    // Владелец буфера — живое главное окно: если владельцем сделать попап,
+    // Windows очистит буфер при закрытии попапа, и вставка не сработает.
+    const HWND clipboard_owner = (g_runtime && g_runtime->main_window)
+        ? g_runtime->main_window
+        : owner;
+    g_last_clipboard_error.clear();
+    try {
+        offline_translator::Win32Clipboard clipboard(clipboard_owner);
+        clipboard.set_text(text);
+        std::wstring check;
+        try {
+            check = clipboard.get_text();
+        } catch (const std::exception&) {
+        }
+        offline_translator::app_log_info(
+            "clipboard: set len=" + std::to_string(text.size()) +
+            " readback=" + std::to_string(check.size()) +
+            (check == text ? " ok" : " mismatch"));
+        if (check != text) {
+            g_last_clipboard_error =
+                from_utf8("содержимое буфера не совпало после записи");
+        }
+    } catch (const std::exception& error) {
+        g_last_clipboard_error = from_utf8(error.what());
+        offline_translator::app_log_info(
+            std::string("clipboard: ошибка записи: ") + error.what());
+    }
+    try {
+        offline_translator::add_clipboard_history_item(to_utf8(text));
+    } catch (const std::exception&) {
+    }
+}
+
+void focus_foreign_window(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd)) {
+        return;
+    }
+    AllowSetForegroundWindow(ASFW_ANY);
+    const DWORD current_thread = GetCurrentThreadId();
+    DWORD target_pid = 0;
+    const DWORD target_thread = GetWindowThreadProcessId(hwnd, &target_pid);
+    bool attached = false;
+    if (target_thread && target_thread != current_thread) {
+        attached = AttachThreadInput(current_thread, target_thread, TRUE) != FALSE;
+    }
+    if (IsIconic(hwnd)) {
+        ShowWindow(hwnd, SW_RESTORE);
+    }
+    BringWindowToTop(hwnd);
+    SetForegroundWindow(hwnd);
+    // Ждём фактической активации, иначе инжектированный Ctrl+V уйдёт
+    // не в то окно и вставки не будет.
+    const HWND target_root = GetAncestor(hwnd, GA_ROOT);
+    const ULONGLONG deadline = GetTickCount64() + 500;
+    while (GetTickCount64() < deadline) {
+        const HWND foreground = GetForegroundWindow();
+        if (foreground == hwnd ||
+            (foreground && GetAncestor(foreground, GA_ROOT) == target_root)) {
+            break;
+        }
+        Sleep(20);
+    }
+    if (attached) {
+        AttachThreadInput(current_thread, target_thread, FALSE);
+    }
+}
+
+void replace_source_with_translation(HWND owner, const std::wstring& text) {
+    if (text.empty() || text.rfind(L"Ошибка:", 0) == 0) {
+        return;
+    }
+    const HWND target = g_selection.replace_hwnd;
+    // Сначала убираем попап: буфер обмена, записанный владельцем-попапом,
+    // очистился бы вместе с окном. Копируем после закрытия, владельцем —
+    // живое главное окно.
+    hide_result_popup();
+    copy_text_to_clipboard(
+        g_runtime ? g_runtime->main_window : owner, text);
+    offline_translator::app_log_info(
+        "replace: target=" + std::to_string(
+            reinterpret_cast<uintptr_t>(target)) +
+        " len=" + std::to_string(text.size()));
+    if (target && IsWindow(target)) {
+        focus_foreign_window(target);
+    }
+    Sleep(120);
+    // Классическим полям (Edit/RichEdit/Scintilla) вставляем напрямую
+    // через WM_PASTE в сфокусированный контрол целевого потока — это не
+    // зависит от активации окна. Остальным (браузеры и т.п.) — Ctrl+V.
+    bool pasted = false;
+    {
+        const HWND foreground = GetForegroundWindow();
+        const DWORD thread = foreground
+            ? GetWindowThreadProcessId(foreground, nullptr)
+            : 0;
+        GUITHREADINFO info{sizeof(GUITHREADINFO)};
+        if (thread && GetGUIThreadInfo(thread, &info) && info.hwndFocus &&
+            info.hwndFocus != foreground) {
+            wchar_t class_name[64]{};
+            GetClassNameW(info.hwndFocus, class_name, 64);
+            const bool classic_edit =
+                _wcsicmp(class_name, L"Edit") == 0 ||
+                _wcsicmp(class_name, L"Scintilla") == 0 ||
+                _wcsnicmp(class_name, L"RichEdit", 8) == 0;
+            if (classic_edit) {
+                SendMessageW(info.hwndFocus, WM_PASTE, 0, 0);
+                pasted = true;
+            }
+        }
+    }
+    if (!pasted) {
+        try {
+            offline_translator::send_paste_keyboard_shortcut();
+        } catch (const std::exception&) {
+        }
+    }
+    Sleep(400);
+    {
+        const bool ctrl_down =
+            (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        const HWND foreground = GetForegroundWindow();
+        const DWORD thread = GetWindowThreadProcessId(foreground, nullptr);
+        GUITHREADINFO info{sizeof(GUITHREADINFO)};
+        GetGUIThreadInfo(thread, &info);
+        std::wstring clip;
+        try {
+            clip = clipboard_text();
+        } catch (const std::exception&) {
+        }
+        offline_translator::app_log_info(
+            "replace: pasted=" + std::to_string(pasted) +
+            " ctrl_down=" + std::to_string(ctrl_down) +
+            " fg=" + std::to_string(
+                reinterpret_cast<uintptr_t>(foreground)) +
+            " focus=" + std::to_string(
+                reinterpret_cast<uintptr_t>(info.hwndFocus)) +
+            " focus_class=" + [&] {
+                wchar_t cls[64]{};
+                if (info.hwndFocus) {
+                    GetClassNameW(info.hwndFocus, cls, 64);
+                }
+                return to_utf8(cls);
+            }() +
+            " clip_len=" + std::to_string(clip.size()));
+    }
 }
 
 double monotonic_seconds() {
@@ -471,8 +700,130 @@ void select_language(HWND combo, const std::string& code, int fallback) {
 
 void set_status(const std::wstring& text) {
     if (g_status_label) {
-        SetWindowTextW(g_status_label, text.c_str());
+        const std::wstring shown = offline_translator::tr(text);
+        SetWindowTextW(g_status_label, shown.c_str());
     }
+}
+
+// Локализация интерфейса: запоминаем исходные (русские) подписи контролов
+// и подставляем перевод текущего языка. Повторный вызов переводит уже
+// переведённые окна из запомненных оригиналов.
+extern HWND g_settings_panel;
+extern HWND g_settings_nav[];
+
+std::unordered_map<HWND, std::wstring> g_ui_originals;
+std::unordered_map<HWND, std::vector<std::wstring>> g_ui_combo_originals;
+
+void localize_control_text(HWND control) {
+    if (!control || !IsWindow(control)) {
+        return;
+    }
+    wchar_t class_name[32]{};
+    GetClassNameW(control, class_name, 32);
+    if (_wcsicmp(class_name, L"ComboBox") == 0) {
+        auto& originals = g_ui_combo_originals[control];
+        const LRESULT count = SendMessageW(control, CB_GETCOUNT, 0, 0);
+        if (originals.empty() && count > 0) {
+            for (LRESULT index = 0; index < count; ++index) {
+                const LRESULT length =
+                    SendMessageW(control, CB_GETLBTEXTLEN, index, 0);
+                if (length < 0) {
+                    continue;
+                }
+                std::wstring item(static_cast<std::size_t>(length) + 1, L'\0');
+                SendMessageW(
+                    control,
+                    CB_GETLBTEXT,
+                    index,
+                    reinterpret_cast<LPARAM>(item.data()));
+                item.resize(static_cast<std::size_t>(length));
+                originals.push_back(item);
+            }
+        }
+        if (!originals.empty()) {
+            const LRESULT selected = SendMessageW(control, CB_GETCURSEL, 0, 0);
+            SendMessageW(control, CB_RESETCONTENT, 0, 0);
+            for (const auto& item : originals) {
+                const std::wstring translated = offline_translator::tr(item);
+                SendMessageW(
+                    control,
+                    CB_ADDSTRING,
+                    0,
+                    reinterpret_cast<LPARAM>(translated.c_str()));
+            }
+            if (selected >= 0) {
+                SendMessageW(control, CB_SETCURSEL, selected, 0);
+            }
+        }
+        return;
+    }
+    const std::wstring text = control_text(control);
+    if (text.empty()) {
+        return;
+    }
+    auto found = g_ui_originals.find(control);
+    if (found == g_ui_originals.end()) {
+        found = g_ui_originals.emplace(control, text).first;
+    }
+    const std::wstring translated = offline_translator::tr(found->second);
+    if (translated != text) {
+        SetWindowTextW(control, translated.c_str());
+    }
+}
+
+void localize_window(HWND window) {
+    if (!window || !IsWindow(window)) {
+        return;
+    }
+    const std::wstring title = control_text(window);
+    if (!title.empty()) {
+        auto found = g_ui_originals.find(window);
+        if (found == g_ui_originals.end()) {
+            found = g_ui_originals.emplace(window, title).first;
+        }
+        const std::wstring translated = offline_translator::tr(found->second);
+        if (translated != title) {
+            SetWindowTextW(window, translated.c_str());
+        }
+    }
+    EnumChildWindows(
+        window,
+        [](HWND child, LPARAM) -> BOOL {
+            localize_control_text(child);
+            return TRUE;
+        },
+        0);
+}
+
+// Переводит все уже созданные окна приложения на текущий язык.
+void relocalize_all() {
+    if (g_runtime) {
+        localize_window(g_runtime->main_window);
+        localize_window(g_runtime->settings_window);
+        localize_window(g_runtime->packages_window);
+        localize_window(g_result_popup);
+    }
+    if (g_settings_panel) {
+        EnumChildWindows(
+            g_settings_panel,
+            [](HWND child, LPARAM) -> BOOL {
+                localize_control_text(child);
+                return TRUE;
+            },
+            0);
+    }
+}
+
+LRESULT localized_message_box(
+    HWND owner,
+    const wchar_t* text,
+    const wchar_t* title,
+    UINT flags) {
+    return MessageBoxW(
+        owner,
+        offline_translator::tr(text).c_str(),
+        offline_translator::tr(title).c_str(),
+        flags);
 }
 
 void post_payload(HWND window, UINT message, std::wstring text, bool failed) {
@@ -490,7 +841,11 @@ void post_payload(HWND window, UINT message, std::wstring text, bool failed) {
 }
 
 void post_status(HWND window, const std::string& text) {
-    post_payload(window, kStatusMessage, from_utf8(text), false);
+    post_payload(
+        window,
+        kStatusMessage,
+        offline_translator::tr(from_utf8(text)),
+        false);
 }
 
 void fill_language_combos() {
@@ -710,49 +1065,31 @@ void start_translation(HWND window) {
 
 std::wstring package_status_text(const PackageRow& row) {
     if (row.installed) {
-        return L"установлено";
+        return offline_translator::tr(L"установлено");
     }
     if (row.incomplete) {
-        return L"незавершённая загрузка";
+        return offline_translator::tr(L"незавершённая загрузка");
     }
-    return L"не установлено";
+    return offline_translator::tr(L"не установлено");
 }
 
 std::vector<PackageRow> collect_package_rows() {
-    const auto nllb_root = model_root_path(true);
-    const auto argos_root = model_root_path(false);
-    const auto store = offline_translator::merge_store_pairs(
-        offline_translator::ArgosModelManager::available_packages(),
-        offline_translator::ArgosModelManager::installed_packages(argos_root));
     std::vector<PackageRow> rows;
-    rows.reserve(store.size());
-    for (const auto& entry : store) {
+    // Список показывает пакеты только выбранного движка.
+    const auto engine = g_runtime
+        ? selected_engine()
+        : offline_translator::EngineKind::argos;
+    if (engine == offline_translator::EngineKind::nllb) {
         PackageRow row;
-        row.nllb = entry.nllb;
-        if (entry.nllb) {
-            offline_translator::NllbModelManager manager(nllb_root);
-            row.title = L"NLLB-200 Distilled 600M";
-            row.installed = manager.is_installed();
-            row.incomplete = manager.has_incomplete_package();
-        } else {
-            row.from_code = entry.from_code;
-            row.to_code = entry.to_code;
-            offline_translator::ArgosModelManager manager(
-                argos_root,
-                entry.from_code,
-                entry.to_code);
-            row.title = L"Argos · " + from_utf8(
-                offline_translator::store_pair_label(entry));
-            row.installed = manager.is_installed();
-            row.incomplete = manager.has_incomplete_package();
-        }
-        row.installed = row.installed || entry.installed;
-        row.incomplete = row.incomplete || entry.incomplete;
+        row.nllb = true;
+        row.title = L"NLLB-200 Distilled 600M";
+        offline_translator::NllbModelManager manager(model_root_path(true));
+        row.installed = manager.is_installed();
+        row.incomplete = manager.has_incomplete_package();
         rows.push_back(std::move(row));
+        return rows;
     }
-    if (g_runtime &&
-        selected_engine() == offline_translator::EngineKind::marian) {
-        rows.clear();
+    if (engine == offline_translator::EngineKind::marian) {
         const auto marian_root = std::filesystem::path(marian_model_root());
         const auto catalog =
             offline_translator::MarianModelManager::available_packages();
@@ -798,61 +1135,83 @@ std::vector<PackageRow> collect_package_rows() {
         }
         return rows;
     }
-    if (!g_runtime ||
-        selected_engine() != offline_translator::EngineKind::firefox) {
-        return rows;
-    }
-    // Секция Firefox Translations для выбранного размера модели.
-    std::string architecture = g_runtime->settings.architecture;
-    if (!offline_translator::FirefoxModelManager::is_architecture(architecture)) {
-        architecture = "tiny";
-    }
-    const auto firefox_root = std::filesystem::path(firefox_model_root());
-    const auto catalog = offline_translator::FirefoxModelManager::available_packages(
-        firefox_root, architecture);
-    const auto installed =
-        offline_translator::FirefoxModelManager::installed_packages(firefox_root);
-    std::vector<offline_translator::StorePair> firefox_pairs;
-    std::set<std::pair<std::string, std::string>> seen;
-    for (const auto& item : installed) {
-        if (item.architecture.empty() || item.architecture == architecture) {
+    if (engine == offline_translator::EngineKind::firefox) {
+        // Пары Firefox Translations для выбранного размера модели.
+        std::string architecture = g_runtime->settings.architecture;
+        if (!offline_translator::FirefoxModelManager::is_architecture(architecture)) {
+            architecture = "tiny";
+        }
+        const auto firefox_root = std::filesystem::path(firefox_model_root());
+        const auto catalog = offline_translator::FirefoxModelManager::available_packages(
+            firefox_root, architecture);
+        const auto installed =
+            offline_translator::FirefoxModelManager::installed_packages(firefox_root);
+        std::vector<offline_translator::StorePair> firefox_pairs;
+        std::set<std::pair<std::string, std::string>> seen;
+        for (const auto& item : installed) {
+            if (item.architecture.empty() || item.architecture == architecture) {
+                offline_translator::StorePair pair;
+                pair.from_code = item.from_code;
+                pair.to_code = item.to_code;
+                pair.installed = true;
+                firefox_pairs.push_back(pair);
+                seen.emplace(item.from_code, item.to_code);
+            }
+        }
+        for (const auto& item : catalog) {
+            if (seen.count({item.from_code, item.to_code}) > 0) {
+                continue;
+            }
             offline_translator::StorePair pair;
             pair.from_code = item.from_code;
             pair.to_code = item.to_code;
-            pair.installed = true;
-            firefox_pairs.push_back(pair);
-            seen.emplace(item.from_code, item.to_code);
+            firefox_pairs.push_back(std::move(pair));
         }
+        for (auto& pair : firefox_pairs) {
+            offline_translator::FirefoxModelManager manager(
+                firefox_root,
+                architecture,
+                pair.from_code,
+                pair.to_code);
+            pair.installed = pair.installed || manager.is_installed();
+            pair.incomplete = manager.has_incomplete_package();
+        }
+        offline_translator::sort_store_pairs(firefox_pairs);
+        for (const auto& pair : firefox_pairs) {
+            PackageRow row;
+            row.firefox = true;
+            row.architecture = architecture;
+            row.from_code = pair.from_code;
+            row.to_code = pair.to_code;
+            row.title = from_utf8("Firefox (" + architecture + ") · " +
+                                  offline_translator::store_pair_label(pair));
+            row.installed = pair.installed;
+            row.incomplete = pair.incomplete;
+            rows.push_back(std::move(row));
+        }
+        return rows;
     }
-    for (const auto& item : catalog) {
-        if (seen.count({item.from_code, item.to_code}) > 0) {
+    // Argos: каталог + установленные пары, без строки NLLB.
+    const auto argos_root = model_root_path(false);
+    const auto store = offline_translator::merge_store_pairs(
+        offline_translator::ArgosModelManager::available_packages(),
+        offline_translator::ArgosModelManager::installed_packages(argos_root));
+    rows.reserve(store.size());
+    for (const auto& entry : store) {
+        if (entry.nllb) {
             continue;
         }
-        offline_translator::StorePair pair;
-        pair.from_code = item.from_code;
-        pair.to_code = item.to_code;
-        firefox_pairs.push_back(std::move(pair));
-    }
-    for (auto& pair : firefox_pairs) {
-        offline_translator::FirefoxModelManager manager(
-            firefox_root,
-            architecture,
-            pair.from_code,
-            pair.to_code);
-        pair.installed = pair.installed || manager.is_installed();
-        pair.incomplete = manager.has_incomplete_package();
-    }
-    offline_translator::sort_store_pairs(firefox_pairs);
-    for (const auto& pair : firefox_pairs) {
         PackageRow row;
-        row.firefox = true;
-        row.architecture = architecture;
-        row.from_code = pair.from_code;
-        row.to_code = pair.to_code;
-        row.title = from_utf8("Firefox (" + architecture + ") · " +
-                              offline_translator::store_pair_label(pair));
-        row.installed = pair.installed;
-        row.incomplete = pair.incomplete;
+        row.from_code = entry.from_code;
+        row.to_code = entry.to_code;
+        offline_translator::ArgosModelManager manager(
+            argos_root,
+            entry.from_code,
+            entry.to_code);
+        row.title = L"Argos · " + from_utf8(
+            offline_translator::store_pair_label(entry));
+        row.installed = manager.is_installed() || entry.installed;
+        row.incomplete = manager.has_incomplete_package() || entry.incomplete;
         rows.push_back(std::move(row));
     }
     return rows;
@@ -866,10 +1225,11 @@ void update_packages_status_count() {
     const std::size_t total = g_runtime->package_rows_all.size();
     std::wstring text;
     if (shown == total) {
-        text = L"Пакетов в списке: " + std::to_wstring(total);
+        text = offline_translator::tr(L"Пакетов в списке: ") + std::to_wstring(total);
     } else {
-        text = L"Показано " + std::to_wstring(shown) + L" из " +
-            std::to_wstring(total) + L" пакетов";
+        text = offline_translator::tr(L"Показано ") + std::to_wstring(shown) +
+            offline_translator::tr(L" из ") + std::to_wstring(total) +
+            offline_translator::tr(L" пакетов");
     }
     SetWindowTextW(g_package_status, text.c_str());
 }
@@ -921,6 +1281,31 @@ void refresh_package_list() {
     }
     const bool firefox_mode =
         selected_engine() == offline_translator::EngineKind::firefox;
+    if (g_package_caption) {
+        static const wchar_t* captions[] = {
+            L"Пакеты Argos Translate — каталог и установленные пары:",
+            L"Пакет NLLB-200 — одна модель на ~200 языков:",
+            L"Пакеты Firefox Translations:",
+            L"Пакеты MarianMT — модели OPUS-MT с Hugging Face:",
+        };
+        int caption = 0;
+        switch (selected_engine()) {
+            case offline_translator::EngineKind::nllb:
+                caption = 1;
+                break;
+            case offline_translator::EngineKind::firefox:
+                caption = 2;
+                break;
+            case offline_translator::EngineKind::marian:
+                caption = 3;
+                break;
+            case offline_translator::EngineKind::argos:
+                break;
+        }
+        SetWindowTextW(
+            g_package_caption,
+            offline_translator::tr(captions[caption]).c_str());
+    }
     if (g_package_arch_caption) {
         ShowWindow(g_package_arch_caption, firefox_mode ? SW_SHOW : SW_HIDE);
     }
@@ -964,7 +1349,7 @@ void start_package_job(HWND packages_window, bool install) {
     }
     const PackageRow* selected = selected_package_row();
     if (!selected) {
-        MessageBoxW(
+        localized_message_box(
             packages_window,
             L"Выберите пакет.",
             L"Пакеты",
@@ -973,7 +1358,7 @@ void start_package_job(HWND packages_window, bool install) {
     }
     const PackageRow row = *selected;
     if (install && row.installed) {
-        MessageBoxW(
+        localized_message_box(
             packages_window,
             L"Этот пакет уже установлен.",
             L"Пакеты",
@@ -981,7 +1366,7 @@ void start_package_job(HWND packages_window, bool install) {
         return;
     }
     if (!install && !row.installed && !row.incomplete) {
-        MessageBoxW(
+        localized_message_box(
             packages_window,
             L"Нечего удалять: пакет не установлен.",
             L"Пакеты",
@@ -989,10 +1374,9 @@ void start_package_job(HWND packages_window, bool install) {
         return;
     }
     if (install && row.nllb) {
-        const int answer = MessageBoxW(
+        const int answer = localized_message_box(
             packages_window,
-            L"Скачать модель NLLB-200 Distilled 600M (около 622 МБ)?\n"
-            L"Это займёт время и место на диске.",
+            L"Скачать модель NLLB-200 Distilled 600M (около 622 МБ)?\nЭто займёт время и место на диске.",
             L"Установка NLLB",
             MB_ICONWARNING | MB_YESNO);
         if (answer != IDYES) {
@@ -1000,7 +1384,7 @@ void start_package_job(HWND packages_window, bool install) {
         }
     }
     if (install && row.firefox) {
-        const int answer = MessageBoxW(
+        const int answer = localized_message_box(
             packages_window,
             (L"Скачать пакет Firefox Translations?\n" + row.title).c_str(),
             L"Установка Firefox",
@@ -1010,7 +1394,7 @@ void start_package_job(HWND packages_window, bool install) {
         }
     }
     if (install && row.marian) {
-        const int answer = MessageBoxW(
+        const int answer = localized_message_box(
             packages_window,
             (L"Скачать модель MarianMT (Helsinki-NLP OPUS-MT)?\n" +
              row.title)
@@ -1022,10 +1406,9 @@ void start_package_job(HWND packages_window, bool install) {
         }
     }
     if (!install && row.nllb) {
-        const int answer = MessageBoxW(
+        const int answer = localized_message_box(
             packages_window,
-            L"Удалить установленную модель NLLB-200?\n"
-            L"Это единственная модель NLLB; её придётся качать заново.",
+            L"Удалить установленную модель NLLB-200?\nЭто единственная модель NLLB; её придётся качать заново.",
             L"Удаление NLLB",
             MB_ICONWARNING | MB_YESNO);
         if (answer != IDYES) {
@@ -1035,7 +1418,7 @@ void start_package_job(HWND packages_window, bool install) {
     if (!install && !row.nllb) {
         const std::wstring question =
             L"Удалить пакет " + row.title + L"?";
-        const int answer = MessageBoxW(
+        const int answer = localized_message_box(
             packages_window,
             question.c_str(),
             row.marian ? L"Удаление MarianMT" : L"Удаление Argos",
@@ -1195,12 +1578,25 @@ BOOL CALLBACK apply_theme_to_child(HWND child, LPARAM) {
     return TRUE;
 }
 
+void apply_dark_title_bar(HWND window) {
+    if (!window || !IsWindow(window)) {
+        return;
+    }
+    // Тёмный заголовок окна в тёмной теме (Windows 10 1809+).
+    const BOOL dark = is_dark_theme() ? TRUE : FALSE;
+    if (FAILED(DwmSetWindowAttribute(
+            window, 20, &dark, sizeof(dark)))) {
+        DwmSetWindowAttribute(window, 19, &dark, sizeof(dark));
+    }
+}
+
 void apply_theme_to_window(HWND window) {
     if (!window || !IsWindow(window)) {
         return;
     }
     SetWindowTheme(window, L"", L"");
     EnumChildWindows(window, apply_theme_to_child, 0);
+    apply_dark_title_bar(window);
     InvalidateRect(window, nullptr, TRUE);
     RedrawWindow(
         window,
@@ -1543,7 +1939,9 @@ void add_tray_icon(HWND window) {
     g_tray_data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     g_tray_data.uCallbackMessage = kTrayMessage;
     g_tray_data.hIcon = g_tray_icon;
-    wcscpy_s(g_tray_data.szTip, L"Offline Translator");
+    wcscpy_s(
+        g_tray_data.szTip,
+        L"TLing");
     if (Shell_NotifyIconW(NIM_ADD, &g_tray_data)) {
         g_tray_added = true;
     }
@@ -1582,6 +1980,7 @@ void destroy_popup_windows() {
         g_result_popup = nullptr;
         g_popup_result_edit = nullptr;
         g_popup_copy_button = nullptr;
+        g_popup_replace_button = nullptr;
     }
 }
 
@@ -1604,11 +2003,32 @@ const wchar_t* tray_menu_label(UINT id) {
             return L"Открыть";
         case kTrayAutostart:
             return L"Запускать вместе с Windows";
+        case kTrayAutoCopy:
+            return L"Автоматически копировать выделенный текст в буфер обмена";
+        case kTrayCheckUpdate:
+            return L"Проверить обновления";
         case kTrayExit:
             return L"Выход";
+        case kTrayHistoryRoot:
+            return L"История копирований";
+        case kTrayHistoryEmpty:
+            return L"Пока пусто";
+        case kTrayHistoryClear:
+            return L"Очистить историю";
         default:
-            return L"";
+            break;
     }
+    if (id >= kTrayHistoryFirst && id <= kTrayHistoryLast) {
+        return L"Копировать";
+    }
+    if (id >= kTrayHistoryTranslateFirst && id <= kTrayHistoryTranslateLast) {
+        return L"Перевести";
+    }
+    if (id >= kTrayHistoryPreviewFirst &&
+        id < kTrayHistoryPreviewFirst + g_tray_history_labels.size()) {
+        return g_tray_history_labels[id - kTrayHistoryPreviewFirst].c_str();
+    }
+    return L"";
 }
 
 void show_tray_menu(HWND window) {
@@ -1628,11 +2048,105 @@ void show_tray_menu(HWND window) {
         MF_OWNERDRAW,
         kTrayOpen,
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayOpen)));
+    HMENU history_menu = CreatePopupMenu();
+    g_tray_history_popup = history_menu;
+    g_tray_history_items.clear();
+    g_tray_history_labels.clear();
+    std::vector<std::string> history;
+    try {
+        history = offline_translator::load_clipboard_history();
+    } catch (const std::exception&) {
+    }
+    const int history_limit = g_runtime
+        ? offline_translator::normalize_clipboard_history_limit(
+              g_runtime->settings.clipboard_history_limit)
+        : offline_translator::kDefaultClipboardHistoryLimit;
+    if (static_cast<int>(history.size()) > history_limit) {
+        history.resize(static_cast<std::size_t>(history_limit));
+    }
+    if (history.empty()) {
+        AppendMenuW(
+            history_menu,
+            MF_OWNERDRAW | MF_GRAYED,
+            kTrayHistoryEmpty,
+            reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayHistoryEmpty)));
+    } else {
+        const int shown = std::min(
+            static_cast<int>(history.size()),
+            kTrayHistoryLast - kTrayHistoryFirst + 1);
+        for (int index = 0; index < shown; ++index) {
+            g_tray_history_items.push_back(
+                from_utf8(history[static_cast<std::size_t>(index)]));
+            g_tray_history_labels.push_back(
+                from_utf8(offline_translator::clipboard_history_preview(
+                    history[static_cast<std::size_t>(index)])));
+            HMENU item_menu = CreatePopupMenu();
+            AppendMenuW(
+                item_menu,
+                MF_OWNERDRAW,
+                kTrayHistoryFirst + index,
+                reinterpret_cast<LPCWSTR>(
+                    static_cast<UINT_PTR>(kTrayHistoryFirst + index)));
+            AppendMenuW(
+                item_menu,
+                MF_OWNERDRAW,
+                kTrayHistoryTranslateFirst + index,
+                reinterpret_cast<LPCWSTR>(
+                    static_cast<UINT_PTR>(kTrayHistoryTranslateFirst + index)));
+            MENUITEMINFOW item_info{};
+            item_info.cbSize = sizeof(item_info);
+            item_info.fMask = MIIM_FTYPE | MIIM_SUBMENU | MIIM_ID | MIIM_DATA;
+            item_info.fType = MFT_OWNERDRAW;
+            item_info.wID = kTrayHistoryPreviewFirst + index;
+            item_info.hSubMenu = item_menu;
+            item_info.dwItemData = kTrayHistoryPreviewFirst + index;
+            InsertMenuItemW(
+                history_menu,
+                GetMenuItemCount(history_menu),
+                TRUE,
+                &item_info);
+        }
+        AppendMenuW(history_menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(
+            history_menu,
+            MF_OWNERDRAW,
+            kTrayHistoryClear,
+            reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayHistoryClear)));
+    }
+    MENUITEMINFOW history_item{};
+    history_item.cbSize = sizeof(history_item);
+    history_item.fMask = MIIM_FTYPE | MIIM_SUBMENU | MIIM_ID | MIIM_DATA;
+    history_item.fType = MFT_OWNERDRAW;
+    history_item.wID = kTrayHistoryRoot;
+    history_item.hSubMenu = history_menu;
+    history_item.dwItemData = kTrayHistoryRoot;
+    InsertMenuItemW(menu, GetMenuItemCount(menu), TRUE, &history_item);
+    UINT autocopy_flags = MF_OWNERDRAW;
+    {
+        bool autocopy = false;
+        try {
+            autocopy = g_runtime && g_runtime->settings.auto_copy_selection;
+        } catch (const std::exception&) {
+        }
+        if (autocopy) {
+            autocopy_flags |= MF_CHECKED;
+        }
+    }
+    AppendMenuW(
+        menu,
+        autocopy_flags,
+        kTrayAutoCopy,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayAutoCopy)));
     AppendMenuW(
         menu,
         autostart_flags,
         kTrayAutostart,
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayAutostart)));
+    AppendMenuW(
+        menu,
+        MF_OWNERDRAW,
+        kTrayCheckUpdate,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayCheckUpdate)));
     AppendMenuW(
         menu,
         MF_OWNERDRAW,
@@ -1822,6 +2336,8 @@ void hide_result_popup() {
         g_result_popup = nullptr;
         g_popup_result_edit = nullptr;
         g_popup_copy_button = nullptr;
+        g_popup_replace_button = nullptr;
+        g_popup_header = nullptr;
     }
 }
 
@@ -1976,7 +2492,7 @@ void show_selection_button(int cursor_x, int cursor_y, HWND main_window) {
     g_selection_button = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW |
             (have_icon ? WS_EX_LAYERED : 0),
-        L"OfflineTranslatorSelectionButton",
+        L"TLingSelectionButton",
         L"Aa",
         WS_POPUP | WS_VISIBLE,
         cursor_x - kSelectionIconSize / 2,
@@ -2058,7 +2574,7 @@ void show_result_popup(
 
     g_result_popup = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-        L"OfflineTranslatorResultPopup",
+        L"TLingResultPopup",
         L"Перевод",
         WS_POPUP | WS_VISIBLE,
         x,
@@ -2076,7 +2592,7 @@ void show_result_popup(
     const std::wstring header = from_utf8(
         offline_translator::language_display_name(source_code) + " → " +
         offline_translator::language_display_name(target_code));
-    const HWND header_label = CreateWindowW(
+    g_popup_header = CreateWindowW(
         L"STATIC",
         header.c_str(),
         WS_VISIBLE | WS_CHILD,
@@ -2089,7 +2605,7 @@ void show_result_popup(
         nullptr,
         nullptr);
     SendMessageW(
-        header_label,
+        g_popup_header,
         WM_SETFONT,
         reinterpret_cast<WPARAM>(popup_font(PopupFont::header)),
         TRUE);
@@ -2140,8 +2656,36 @@ void show_result_popup(
         flat_button_subclass,
         1,
         0);
+    const bool show_replace = text.rfind(L"Ошибка:", 0) != 0;
+    g_popup_replace_button = nullptr;
+    int next_left = copy_x;
+    if (show_replace) {
+        next_left = copy_x - 88 - 8;
+        g_popup_replace_button = CreateWindowW(
+            L"BUTTON",
+            L"Замена",
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+            next_left,
+            buttons_y,
+            88,
+            button_height,
+            g_result_popup,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kResultReplaceButton)),
+            nullptr,
+            nullptr);
+        SendMessageW(
+            g_popup_replace_button,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(popup_font(PopupFont::button)),
+            TRUE);
+        SetWindowSubclass(
+            g_popup_replace_button,
+            flat_button_subclass,
+            1,
+            0);
+    }
     if (selectable) {
-        const int close_x = copy_x - 84 - 8;
+        const int close_x = next_left - 84 - 8;
         const HWND close_button = CreateWindowW(
             L"BUTTON",
             L"Закрыть",
@@ -2166,6 +2710,26 @@ void show_result_popup(
             0);
     }
     SetFocus(g_popup_result_edit);
+    localize_window(g_result_popup);
+    {
+        RECT bounds{};
+        GetWindowRect(g_result_popup, &bounds);
+        offline_translator::app_log_info(
+            "popup: показано hwnd=" + std::to_string(
+                reinterpret_cast<uintptr_t>(g_result_popup)) +
+            " rect=" + std::to_string(bounds.left) + "," +
+            std::to_string(bounds.top) + "," +
+            std::to_string(bounds.right - bounds.left) + "x" +
+            std::to_string(bounds.bottom - bounds.top) +
+            " copy=" + std::to_string(
+                reinterpret_cast<uintptr_t>(g_popup_copy_button)) +
+            " replace=" + std::to_string(
+                reinterpret_cast<uintptr_t>(g_popup_replace_button)));
+    }
+    if (!selectable) {
+        // Иначе всё поле выделено и Copy может взять чужое выделение.
+        SendMessageW(g_popup_result_edit, EM_SETSEL, static_cast<WPARAM>(-1), 0);
+    }
 }
 
 void start_selection_translation(HWND main_window) {
@@ -2250,16 +2814,56 @@ void capture_and_show_button(HWND main_window, int cursor_x, int cursor_y) {
     } guard{capturing};
     try {
         const std::wstring selected =
-            offline_translator::capture_selected_text_win32(main_window);
+            offline_translator::capture_selected_text_win32(
+                main_window,
+                g_runtime && g_runtime->settings.auto_copy_selection);
         sel_log("captured: size=" + std::to_string(selected.size()));
         if (selected.size() < 2) {
             return;
         }
+        if (g_runtime && g_runtime->settings.auto_copy_selection) {
+            try {
+                offline_translator::add_clipboard_history_item(to_utf8(selected));
+            } catch (const std::exception&) {
+            }
+        }
         g_selection.selected_text = selected;
+        g_selection.replace_hwnd = g_selection.press_hwnd;
         show_selection_button(cursor_x, cursor_y, main_window);
         sel_log("button shown");
     } catch (const std::exception& error) {
         sel_log(std::string("capture error: ") + error.what());
+    }
+}
+
+// Копирует выделение в буфер без показа кнопки перевода
+// (режим «Только Ctrl+C+C» или не сработавший модификатор).
+void capture_selection_only(HWND main_window) {
+    static std::atomic<bool> capturing{false};
+    if (capturing.exchange(true)) {
+        return;
+    }
+    struct CaptureGuard {
+        std::atomic<bool>& flag;
+        ~CaptureGuard() {
+            flag = false;
+        }
+    } guard{capturing};
+    try {
+        const std::wstring selected =
+            offline_translator::capture_selected_text_win32(main_window, true);
+        sel_log("copy-only: size=" + std::to_string(selected.size()));
+        if (selected.size() < 2) {
+            return;
+        }
+        g_selection.selected_text = selected;
+        g_selection.replace_hwnd = g_selection.press_hwnd;
+        try {
+            offline_translator::add_clipboard_history_item(to_utf8(selected));
+        } catch (const std::exception&) {
+        }
+    } catch (const std::exception& error) {
+        sel_log(std::string("copy-only error: ") + error.what());
     }
 }
 
@@ -2268,6 +2872,11 @@ void finish_double_ctrl_c(HWND main_window) {
         const std::wstring selected = clipboard_text();
         if (selected.size() >= 2) {
             g_selection.selected_text = selected;
+            g_selection.replace_hwnd = GetForegroundWindow();
+            try {
+                offline_translator::add_clipboard_history_item(to_utf8(selected));
+            } catch (const std::exception&) {
+            }
             hide_selection_button();
             offline_translator::app_log_info(
                 "Ctrl+C+C буфер chars=" + std::to_string(selected.size()));
@@ -2327,11 +2936,6 @@ void poll_selection(HWND main_window) {
     GetCursorPos(&cursor);
     poll_double_ctrl_c(main_window);
     const bool pressed = key_down(VK_LBUTTON);
-    if (!g_runtime->settings.selection_popup_enabled) {
-        g_selection.was_pressed = pressed;
-        g_selection.press_active = false;
-        return;
-    }
     if (pressed && !g_selection.was_pressed) {
         if (is_over_our_popup(cursor.x, cursor.y)) {
             g_selection.press_active = false;
@@ -2403,7 +3007,7 @@ void poll_selection(HWND main_window) {
         const bool copy_or_paste_now = offline_translator::should_skip_selection_copy(
             key_down('C'),
             key_down('V'));
-        const bool gate = !g_selection.gesture_invalid &&
+        const bool gesture_ok = !g_selection.gesture_invalid &&
             !is_over_our_popup(cursor.x, cursor.y) &&
             !copy_or_paste_now &&
             offline_translator::should_capture_selection(
@@ -2411,7 +3015,8 @@ void poll_selection(HWND main_window) {
                 window_moved,
                 drag_distance,
                 drag_duration,
-                is_double_click) &&
+                is_double_click);
+        const bool modifier_ok =
             offline_translator::should_show_selection_button(
                 g_runtime->settings.popup_modifier,
                 ctrl_now,
@@ -2426,9 +3031,22 @@ void poll_selection(HWND main_window) {
             std::to_string(ctrl_now) + " modifier=" +
             g_runtime->settings.popup_modifier +
             " skip_copy=" + std::to_string(copy_or_paste_now) +
-            " gate=" + std::to_string(gate));
-        if (gate) {
+            " gesture=" + std::to_string(gesture_ok) +
+            " popup=" + std::to_string(g_runtime->settings.selection_popup_enabled));
+        // Антидубль: двойной клик или быстрый повтор не должны запускать
+        // второй захват поверх первого.
+        const bool recent_capture =
+            (now - g_selection.last_capture_time) < 0.35;
+        if (!recent_capture && gesture_ok &&
+            g_runtime->settings.selection_popup_enabled && modifier_ok) {
+            g_selection.last_capture_time = now;
             capture_and_show_button(main_window, cursor.x, cursor.y);
+        } else if (!recent_capture && gesture_ok &&
+                   g_runtime->settings.auto_copy_selection) {
+            // Копируем выделение в буфер даже без кнопки
+            // (режим «Только Ctrl+C+C» или не сработал модификатор).
+            g_selection.last_capture_time = now;
+            capture_selection_only(main_window);
         }
         g_selection.press_active = false;
     }
@@ -2451,7 +3069,9 @@ void handle_translate_hotkey(HWND window) {
     }
     std::wstring selected;
     try {
-        selected = offline_translator::capture_selected_text_win32(window);
+        selected = offline_translator::capture_selected_text_win32(
+            window,
+            g_runtime && g_runtime->settings.auto_copy_selection);
     } catch (const std::exception&) {
     }
     if (selected.size() < 2) {
@@ -2463,6 +3083,13 @@ void handle_translate_hotkey(HWND window) {
         return;
     }
     g_selection.selected_text = selected;
+    g_selection.replace_hwnd = GetForegroundWindow();
+    if (g_runtime && g_runtime->settings.auto_copy_selection) {
+        try {
+            offline_translator::add_clipboard_history_item(to_utf8(selected));
+        } catch (const std::exception&) {
+        }
+    }
     if (IsWindowVisible(window) && g_source_edit) {
         SetWindowTextW(g_source_edit, selected.c_str());
     }
@@ -2470,6 +3097,338 @@ void handle_translate_hotkey(HWND window) {
 }
 
 void close_settings_window();
+void start_update_check();
+void start_update_install();
+void open_releases_page();
+void open_settings_window(HWND parent, HINSTANCE instance, bool check_updates = false);
+void open_packages_window(HWND parent, HINSTANCE instance);
+
+// Окно настроек: слева сайдбар со страницами (Языки/Поведение/Темы/
+// О программе), справа панель содержимого с вертикальным ползунком.
+// Контентные контролы — дети панели; прокрутка сдвигает панель целиком,
+// сайдбар и кнопки Сохранить/Отмена остаются на месте.
+int g_settings_scroll{0};
+int g_settings_page{1};
+HWND g_settings_panel = nullptr;
+HWND g_settings_nav[5]{};
+HWND g_settings_save = nullptr;
+HWND g_settings_cancel = nullptr;
+
+constexpr int kSettingsSidebarWidth = 170;
+constexpr int kSettingsNavTop = 16;
+constexpr int kSettingsNavHeight = 46;
+constexpr int kSettingsNavGap = 18;
+constexpr wchar_t kSettingsPageProperty[] = L"ot_page";
+constexpr int kSettingsPageLanguages = 0;
+constexpr int kSettingsPageBehavior = 1;
+constexpr int kSettingsPageThemes = 2;
+constexpr int kSettingsPageLanguage = 3;
+constexpr int kSettingsPageAbout = 4;
+
+constexpr int kSettingsScrollLine = 28;
+constexpr int kSettingsScrollPageLines = 3;
+
+HFONT settings_section_font() {
+    static HFONT font = [] {
+        HDC dc = GetDC(nullptr);
+        const int height = -MulDiv(11, GetDeviceCaps(dc, LOGPIXELSY), 72);
+        ReleaseDC(nullptr, dc);
+        return CreateFontW(
+            height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    }();
+    return font;
+}
+
+HFONT settings_nav_font(bool bold) {
+    static HFONT regular = [] {
+        HDC dc = GetDC(nullptr);
+        const int height = -MulDiv(12, GetDeviceCaps(dc, LOGPIXELSY), 72);
+        ReleaseDC(nullptr, dc);
+        return CreateFontW(
+            height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    }();
+    static HFONT heavy = [] {
+        HDC dc = GetDC(nullptr);
+        const int height = -MulDiv(12, GetDeviceCaps(dc, LOGPIXELSY), 72);
+        ReleaseDC(nullptr, dc);
+        return CreateFontW(
+            height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    }();
+    return bold ? heavy : regular;
+}
+
+// Высота контента текущей страницы: видимые дети панели.
+int settings_content_height(HWND panel) {
+    if (!panel) {
+        return 0;
+    }
+    int max_bottom = 0;
+    struct Ctx {
+        HWND panel;
+        int max_bottom;
+    } ctx{panel, 0};
+    EnumChildWindows(
+        panel,
+        [](HWND child, LPARAM lparam) -> BOOL {
+            auto* c = reinterpret_cast<Ctx*>(lparam);
+            if (!IsWindowVisible(child)) {
+                return TRUE;
+            }
+            RECT bounds{};
+            GetWindowRect(child, &bounds);
+            MapWindowPoints(nullptr, c->panel, reinterpret_cast<POINT*>(&bounds), 2);
+            if (bounds.bottom > c->max_bottom) {
+                c->max_bottom = bounds.bottom;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&ctx));
+    return ctx.max_bottom > 0 ? ctx.max_bottom + 14 : 0;
+}
+
+void settings_apply_scroll(HWND window, int new_pos) {
+    if (!g_settings_panel) {
+        return;
+    }
+    RECT client{};
+    GetClientRect(window, &client);
+    SCROLLINFO info{sizeof(SCROLLINFO)};
+    info.fMask = SIF_RANGE | SIF_PAGE;
+    GetScrollInfo(window, SB_VERT, &info);
+    const int max_pos =
+        (int)info.nMax >= (int)info.nPage
+            ? (int)info.nMax - (int)info.nPage + 1
+            : 0;
+    int clamped = new_pos;
+    if (clamped < 0) {
+        clamped = 0;
+    }
+    if (clamped > max_pos) {
+        clamped = max_pos;
+    }
+    g_settings_scroll = clamped;
+    SetWindowPos(
+        g_settings_panel,
+        nullptr,
+        kSettingsSidebarWidth + 6,
+        -clamped,
+        0,
+        0,
+        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    SCROLLINFO pos{sizeof(SCROLLINFO)};
+    pos.fMask = SIF_POS;
+    pos.nPos = clamped;
+    SetScrollInfo(window, SB_VERT, &pos, TRUE);
+}
+
+void settings_relayout(HWND window) {
+    RECT client{};
+    GetClientRect(window, &client);
+    const int content = settings_content_height(g_settings_panel);
+    const int panel_width =
+        client.right - kSettingsSidebarWidth - 8 - 2;
+    // Панель не заходит в полосу кнопок Сохранить/Отмена внизу.
+    const int strip = 48;
+    const int panel_height =
+        content > client.bottom - strip
+            ? content
+            : client.bottom - strip;
+    if (g_settings_panel) {
+        SetWindowPos(
+            g_settings_panel,
+            nullptr,
+            kSettingsSidebarWidth + 6,
+            -g_settings_scroll,
+            panel_width,
+            panel_height,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    SCROLLINFO info{sizeof(SCROLLINFO)};
+    info.fMask = SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL;
+    info.nMin = 0;
+    info.nMax = content;
+    info.nPage = static_cast<UINT>(client.bottom);
+    info.nPos = g_settings_scroll;
+    SetScrollInfo(window, SB_VERT, &info, TRUE);
+    settings_apply_scroll(window, g_settings_scroll);
+    // Сохранить/Отмена — фиксированный низ правой области, всегда поверх панели.
+    if (g_settings_save && g_settings_cancel) {
+        const int y = client.bottom - 40;
+        SetWindowPos(
+            g_settings_cancel,
+            HWND_TOP,
+            client.right - 124,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(
+            g_settings_save,
+            HWND_TOP,
+            client.right - 248,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+void settings_show_page(HWND window, int page) {
+    g_settings_page = page;
+    if (g_settings_panel) {
+        EnumChildWindows(
+            g_settings_panel,
+            [](HWND child, LPARAM lparam) -> BOOL {
+                const INT_PTR child_page =
+                    reinterpret_cast<INT_PTR>(GetPropW(
+                        child, kSettingsPageProperty));
+                ShowWindow(
+                    child,
+                    child_page == static_cast<INT_PTR>(lparam) ? SW_SHOW
+                                                               : SW_HIDE);
+                return TRUE;
+            },
+            static_cast<LPARAM>(page));
+    }
+    for (int index = 0; index < 5; ++index) {
+        if (g_settings_nav[index]) {
+            InvalidateRect(g_settings_nav[index], nullptr, FALSE);
+        }
+    }
+    g_settings_scroll = 0;
+    settings_relayout(window);
+}
+
+void set_update_status(const std::wstring& text) {
+    if (g_settings_update_status) {
+        SetWindowTextW(g_settings_update_status, text.c_str());
+    }
+}
+
+void set_update_controls_busy(bool busy) {
+    g_update_busy = busy;
+    const BOOL enabled = busy ? FALSE : TRUE;
+    if (g_settings_check_update) {
+        EnableWindow(g_settings_check_update, enabled);
+    }
+    if (g_settings_open_releases) {
+        EnableWindow(g_settings_open_releases, enabled);
+    }
+    const bool can_install = !busy && g_pending_update && g_pending_update->asset;
+    if (g_settings_install_update) {
+        EnableWindow(g_settings_install_update, can_install ? TRUE : FALSE);
+    }
+}
+
+void open_releases_page() {
+    const std::wstring url =
+        from_utf8(std::string(offline_translator::kGithubReleasesPage));
+    ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+void start_update_check() {
+    if (g_update_busy) {
+        return;
+    }
+    HWND settings = g_runtime ? g_runtime->settings_window : nullptr;
+    if (!settings) {
+        return;
+    }
+    g_pending_update.reset();
+    set_update_controls_busy(true);
+    set_update_status(L"Проверяю GitHub...");
+    std::thread([settings]() {
+        auto* payload = new UpdateCheckPayload{};
+        try {
+            const auto info = offline_translator::check_for_update(
+                offline_translator::kAppVersion,
+                executable_path().parent_path());
+            if (!info) {
+                payload->text =
+                    L"Установлена последняя версия (" +
+                    from_utf8(std::string(offline_translator::kAppVersionDisplay)) +
+                    L").";
+            } else {
+                payload->info = info;
+                std::wstring text =
+                    L"Доступна " + from_utf8(info->release.title) + L" (" +
+                    from_utf8(info->release.tag) + L").\n";
+                if (info->asset) {
+                    text += L"Файл: " + from_utf8(info->asset->name);
+                } else {
+                    text +=
+                        L"Подходящего файла установки в релизе нет — откройте страницу релизов.";
+                }
+                payload->text = std::move(text);
+            }
+        } catch (const std::exception& error) {
+            payload->failed = true;
+            payload->text =
+                L"Не удалось проверить обновления: " + from_utf8(error.what());
+        }
+        if (!settings || !IsWindow(settings) ||
+            !PostMessageW(
+                settings,
+                kUpdateCheckDoneMessage,
+                0,
+                reinterpret_cast<LPARAM>(payload))) {
+            delete payload;
+        }
+    }).detach();
+}
+
+void start_update_install() {
+    if (g_update_busy || !g_pending_update) {
+        return;
+    }
+    if (!g_pending_update->asset) {
+        open_releases_page();
+        return;
+    }
+    HWND settings = g_runtime ? g_runtime->settings_window : nullptr;
+    HWND main_window = g_runtime ? g_runtime->main_window : nullptr;
+    const auto info = *g_pending_update;
+    set_update_controls_busy(true);
+    set_update_status(L"Скачиваю обновление...");
+    std::thread([settings, main_window, info]() {
+        auto* payload = new UpdateInstallPayload{};
+        try {
+            const auto folder =
+                std::filesystem::temp_directory_path() / "offline-translator-update";
+            const std::filesystem::path destination =
+                folder / std::filesystem::u8path(info.asset->name);
+            offline_translator::download_update_asset(*info.asset, destination);
+            const auto action = offline_translator::apply_downloaded_update(
+                destination,
+                info.install_kind,
+                executable_path().parent_path(),
+                executable_path());
+            payload->quit = action == offline_translator::ApplyUpdateAction::quit;
+            payload->text = payload->quit
+                ? L"Обновление запущено. Программа будет закрыта."
+                : L"Установщик запущен.";
+        } catch (const std::exception& error) {
+            payload->failed = true;
+            payload->text =
+                L"Не удалось установить обновление: " + from_utf8(error.what());
+        }
+        HWND target = settings && IsWindow(settings) ? settings : main_window;
+        if (!target || !IsWindow(target) ||
+            !PostMessageW(
+                target,
+                kUpdateInstallDoneMessage,
+                0,
+                reinterpret_cast<LPARAM>(payload))) {
+            delete payload;
+        }
+    }).detach();
+}
 
 LRESULT CALLBACK selection_button_proc(
     HWND window,
@@ -2513,28 +3472,51 @@ LRESULT CALLBACK result_popup_proc(
     if (message == WM_COMMAND) {
         const int id = LOWORD(w_param);
         if (id == kResultCopyButton) {
-            // Как в Python: копирует выделение, если оно есть,
-            // иначе весь перевод.
-            DWORD selection_start = 0;
-            DWORD selection_end = 0;
-            SendMessageW(
-                g_popup_result_edit,
-                EM_GETSEL,
-                reinterpret_cast<WPARAM>(&selection_start),
-                reinterpret_cast<LPARAM>(&selection_end));
+            // В режиме «клик закрывает» копируем весь перевод: выделение
+            // исходного русского текста ещё висит в другом окне.
             const std::wstring text = g_popup_result_edit
                 ? control_text(g_popup_result_edit)
                 : std::wstring{};
             std::wstring copy = text;
-            if (selection_end > selection_start &&
-                selection_end <= text.size()) {
-                copy = text.substr(selection_start, selection_end - selection_start);
+            if (!click_to_close && g_popup_result_edit) {
+                DWORD selection_start = 0;
+                DWORD selection_end = 0;
+                SendMessageW(
+                    g_popup_result_edit,
+                    EM_GETSEL,
+                    reinterpret_cast<WPARAM>(&selection_start),
+                    reinterpret_cast<LPARAM>(&selection_end));
+                if (selection_end > selection_start &&
+                    selection_end <= text.size()) {
+                    copy = text.substr(
+                        selection_start,
+                        selection_end - selection_start);
+                }
             }
-            try {
-                offline_translator::Win32Clipboard clipboard(window);
-                clipboard.set_text(copy);
-            } catch (const std::exception&) {
+            copy_text_to_clipboard(window, copy);
+            if (!g_last_clipboard_error.empty()) {
+                const std::wstring message =
+                    offline_translator::tr(L"Ошибка") + L": " +
+                    g_last_clipboard_error;
+                localized_message_box(
+                    window,
+                    message.c_str(),
+                    L"Копировать",
+                    MB_ICONWARNING | MB_OK);
+            } else if (g_popup_header) {
+                SetWindowTextW(
+                    g_popup_header,
+                    offline_translator::tr(L"Скопировано в буфер").c_str());
+                InvalidateRect(g_popup_header, nullptr, TRUE);
             }
+            return 0;
+        }
+        if (id == kResultReplaceButton) {
+            offline_translator::app_log_info("replace: клик по кнопке");
+            const std::wstring text = g_popup_result_edit
+                ? control_text(g_popup_result_edit)
+                : std::wstring{};
+            replace_source_with_translation(window, text);
             return 0;
         }
         if (id == kResultCloseButton) {
@@ -2597,13 +3579,33 @@ LRESULT CALLBACK result_popup_proc(
         return 0;
     }
     if (message == WM_LBUTTONUP && click_to_close) {
+        offline_translator::app_log_info("popup: WM_LBUTTONUP (закрываю)");
         hide_result_popup();
         return 0;
     }
     if (message == WM_PARENTNOTIFY && click_to_close &&
         LOWORD(w_param) == WM_LBUTTONDOWN) {
-        const HWND child = reinterpret_cast<HWND>(l_param);
-        if (child != g_popup_copy_button) {
+        // Для кликов мыши lParam — это КООРДИНАТЫ курсора, а не HWND
+        // дочернего окна. По ним и решаем: нажатие на кнопку действия
+        // (Копировать/Замена) не закрывает окно, остальное закрывает.
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        auto over_button = [&cursor](HWND button) {
+            if (!button || !IsWindow(button)) {
+                return false;
+            }
+            RECT bounds{};
+            GetWindowRect(button, &bounds);
+            return PtInRect(&bounds, cursor) != FALSE;
+        };
+        const bool on_action_button =
+            over_button(g_popup_copy_button) ||
+            over_button(g_popup_replace_button);
+        offline_translator::app_log_info(
+            "popup: нажатие в " + std::to_string(cursor.x) + "," +
+            std::to_string(cursor.y) +
+            (on_action_button ? " (кнопка действия)" : " (закрываю)"));
+        if (!on_action_button) {
             hide_result_popup();
         }
         return 0;
@@ -2613,6 +3615,8 @@ LRESULT CALLBACK result_popup_proc(
             g_result_popup = nullptr;
             g_popup_result_edit = nullptr;
             g_popup_copy_button = nullptr;
+            g_popup_replace_button = nullptr;
+            g_popup_header = nullptr;
         }
         return 0;
     }
@@ -2639,9 +3643,23 @@ void apply_settings_dialog(HWND settings_window) {
         SendMessageW(g_settings_click_to_close, BM_GETCHECK, 0, 0) == BST_CHECKED
             ? std::string{offline_translator::kResultWindowClickToClose}
             : std::string{offline_translator::kResultWindowSelectable};
+    settings.auto_copy_selection =
+        g_settings_auto_copy &&
+        SendMessageW(g_settings_auto_copy, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    int history_limit = offline_translator::kDefaultClipboardHistoryLimit;
+    if (g_settings_history_limit) {
+        const std::wstring limit_text = control_text(g_settings_history_limit);
+        try {
+            history_limit = std::stoi(to_utf8(limit_text));
+        } catch (const std::exception&) {
+            history_limit = offline_translator::kDefaultClipboardHistoryLimit;
+        }
+    }
+    settings.clipboard_history_limit =
+        offline_translator::normalize_clipboard_history_limit(history_limit);
     const std::string hotkey = to_utf8(control_text(g_settings_hotkey_edit));
     if (!offline_translator::parse_hotkey(hotkey)) {
-        MessageBoxW(
+        localized_message_box(
             settings_window,
             L"Некорректная горячая клавиша. Пример: Ctrl+Shift+T",
             L"Настройки",
@@ -2673,7 +3691,7 @@ void apply_settings_dialog(HWND settings_window) {
                 !register_translate_hotkey(
                     g_runtime->main_window,
                     settings.translate_hotkey)) {
-                MessageBoxW(
+                localized_message_box(
                     settings_window,
                     L"Не удалось зарегистрировать горячую клавишу.",
                     L"Настройки",
@@ -2690,7 +3708,7 @@ void apply_settings_dialog(HWND settings_window) {
         close_settings_window();
         set_status(L"Настройки сохранены");
     } catch (const std::exception& error) {
-        MessageBoxW(
+        localized_message_box(
             settings_window,
             from_utf8(error.what()).c_str(),
             L"Настройки",
@@ -2705,6 +3723,14 @@ void close_settings_window() {
     HWND settings = g_runtime->settings_window;
     HWND main = g_runtime->main_window;
     g_runtime->settings_window = nullptr;
+    g_settings_scroll = 0;
+    g_settings_panel = nullptr;
+    g_settings_save = nullptr;
+    g_settings_cancel = nullptr;
+    g_settings_engine_combo = nullptr;
+    for (int index = 0; index < 5; ++index) {
+        g_settings_nav[index] = nullptr;
+    }
     g_settings_popup_ctrl = nullptr;
     g_settings_popup_modifier = nullptr;
     g_settings_only_ctrl_c_c = nullptr;
@@ -2715,6 +3741,12 @@ void close_settings_window() {
     g_settings_hotkey_edit = nullptr;
     g_settings_theme_light = nullptr;
     g_settings_theme_dark = nullptr;
+    g_settings_auto_copy = nullptr;
+    g_settings_history_limit = nullptr;
+    g_settings_check_update = nullptr;
+    g_settings_install_update = nullptr;
+    g_settings_open_releases = nullptr;
+    g_settings_update_status = nullptr;
     DestroyWindow(settings);
     if (main) {
         EnableWindow(main, TRUE);
@@ -2722,279 +3754,13 @@ void close_settings_window() {
     }
 }
 
-LRESULT CALLBACK settings_proc(
+// Панель содержимого окна настроек: прокачивает цвета темы и
+// пересылает команды в само окно настроек.
+LRESULT CALLBACK settings_panel_proc(
     HWND window,
     UINT message,
     WPARAM w_param,
     LPARAM l_param) {
-    if (message == WM_CREATE) {
-        const auto settings = g_runtime ? g_runtime->settings
-                                        : offline_translator::AppSettings{};
-        CreateWindowW(
-            L"STATIC",
-            L"Клавиша удержания для кнопки перевода:",
-            WS_VISIBLE | WS_CHILD,
-            16,
-            16,
-            360,
-            20,
-            window,
-            nullptr,
-            nullptr,
-            nullptr);
-        g_settings_popup_modifier = CreateWindowW(
-            L"COMBOBOX",
-            nullptr,
-            WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,
-            16,
-            40,
-            240,
-            160,
-            window,
-            reinterpret_cast<HMENU>(
-                static_cast<INT_PTR>(kSettingsPopupModifier)),
-            nullptr,
-            nullptr);
-        fill_popup_modifier_combo(
-            g_settings_popup_modifier,
-            settings.popup_modifier);
-        g_settings_double_ctrl_c = CreateWindowW(
-            L"BUTTON",
-            L"Переводить выделенный текст по Ctrl+C+C",
-            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
-            16,
-            76,
-            470,
-            24,
-            window,
-            reinterpret_cast<HMENU>(
-                static_cast<INT_PTR>(kSettingsDoubleCtrlC)),
-            nullptr,
-            nullptr);
-        SendMessageW(
-            g_settings_double_ctrl_c,
-            BM_SETCHECK,
-            settings.double_ctrl_c_translation ? BST_CHECKED : BST_UNCHECKED,
-            0);
-        g_settings_only_ctrl_c_c = CreateWindowW(
-            L"BUTTON",
-            L"Только Ctrl+C+C (не показывать кнопку при выделении)",
-            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
-            16,
-            104,
-            470,
-            24,
-            window,
-            reinterpret_cast<HMENU>(
-                static_cast<INT_PTR>(kSettingsOnlyCtrlCC)),
-            nullptr,
-            nullptr);
-        SendMessageW(
-            g_settings_only_ctrl_c_c,
-            BM_SETCHECK,
-            settings.selection_popup_enabled ? BST_UNCHECKED : BST_CHECKED,
-            0);
-        CreateWindowW(
-            L"STATIC",
-            L"Окно результата:",
-            WS_VISIBLE | WS_CHILD,
-            16,
-            140,
-            200,
-            20,
-            window,
-            nullptr,
-            nullptr,
-            nullptr);
-        g_settings_click_to_close = CreateWindowW(
-            L"BUTTON",
-            L"Закрывать нажатием по окну",
-            WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
-            16,
-            164,
-            300,
-            22,
-            window,
-            reinterpret_cast<HMENU>(
-                static_cast<INT_PTR>(kSettingsClickToClose)),
-            nullptr,
-            nullptr);
-        g_settings_selectable = CreateWindowW(
-            L"BUTTON",
-            L"Выделять текст; закрывать кнопкой «Закрыть»",
-            WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
-            16,
-            188,
-            420,
-            22,
-            window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsSelectable)),
-            nullptr,
-            nullptr);
-        const bool click_to_close = settings.result_window_mode !=
-            offline_translator::kResultWindowSelectable;
-        SendMessageW(
-            g_settings_click_to_close,
-            BM_SETCHECK,
-            click_to_close ? BST_CHECKED : BST_UNCHECKED,
-            0);
-        SendMessageW(
-            g_settings_selectable,
-            BM_SETCHECK,
-            click_to_close ? BST_UNCHECKED : BST_CHECKED,
-            0);
-        CreateWindowW(
-            L"STATIC",
-            L"Тема:",
-            WS_VISIBLE | WS_CHILD,
-            16,
-            220,
-            80,
-            20,
-            window,
-            nullptr,
-            nullptr,
-            nullptr);
-        g_settings_theme_light = CreateWindowW(
-            L"BUTTON",
-            L"Светлая",
-            WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
-            16,
-            244,
-            120,
-            22,
-            window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsThemeLight)),
-            nullptr,
-            nullptr);
-        g_settings_theme_dark = CreateWindowW(
-            L"BUTTON",
-            L"Тёмная",
-            WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
-            148,
-            244,
-            120,
-            22,
-            window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsThemeDark)),
-            nullptr,
-            nullptr);
-        const bool dark_theme =
-            offline_translator::normalize_ui_theme(settings.ui_theme) ==
-            offline_translator::kUiThemeDark;
-        SendMessageW(
-            g_settings_theme_light,
-            BM_SETCHECK,
-            dark_theme ? BST_UNCHECKED : BST_CHECKED,
-            0);
-        SendMessageW(
-            g_settings_theme_dark,
-            BM_SETCHECK,
-            dark_theme ? BST_CHECKED : BST_UNCHECKED,
-            0);
-        CreateWindowW(
-            L"STATIC",
-            L"Горячая клавиша перевода выделения:",
-            WS_VISIBLE | WS_CHILD,
-            16,
-            280,
-            300,
-            20,
-            window,
-            nullptr,
-            nullptr,
-            nullptr);
-        g_settings_hotkey_edit = CreateWindowW(
-            L"EDIT",
-            from_utf8(settings.translate_hotkey).c_str(),
-            WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
-            16,
-            304,
-            240,
-            24,
-            window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsHotkeyEdit)),
-            nullptr,
-            nullptr);
-        g_settings_autostart = CreateWindowW(
-            L"BUTTON",
-            L"Запускать вместе с Windows",
-            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
-            16,
-            344,
-            400,
-            24,
-            window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsAutostart)),
-            nullptr,
-            nullptr);
-        bool autostart = false;
-        try {
-            autostart = offline_translator::is_app_autostart_enabled();
-        } catch (const std::exception&) {
-        }
-        SendMessageW(
-            g_settings_autostart,
-            BM_SETCHECK,
-            autostart ? BST_CHECKED : BST_UNCHECKED,
-            0);
-        const std::wstring about_version =
-            L"Версия: " +
-            from_utf8(std::string(offline_translator::kAppVersionDisplay));
-        const std::wstring about_author =
-            L"Автор: " +
-            from_utf8(std::string(offline_translator::kAppPublisher));
-        CreateWindowW(
-            L"STATIC",
-            about_version.c_str(),
-            WS_VISIBLE | WS_CHILD,
-            16,
-            384,
-            470,
-            20,
-            window,
-            nullptr,
-            nullptr,
-            nullptr);
-        CreateWindowW(
-            L"STATIC",
-            about_author.c_str(),
-            WS_VISIBLE | WS_CHILD,
-            16,
-            408,
-            470,
-            20,
-            window,
-            nullptr,
-            nullptr,
-            nullptr);
-        CreateWindowW(
-            L"BUTTON",
-            L"Сохранить",
-            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-            16,
-            448,
-            120,
-            30,
-            window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsSave)),
-            nullptr,
-            nullptr);
-        CreateWindowW(
-            L"BUTTON",
-            L"Отмена",
-            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-            148,
-            448,
-            120,
-            30,
-            window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsCancel)),
-            nullptr,
-            nullptr);
-        apply_theme_to_window(window);
-        return 0;
-    }
     if (message == WM_ERASEBKGND) {
         RECT client{};
         GetClientRect(window, &client);
@@ -3012,8 +3778,802 @@ LRESULT CALLBACK settings_proc(
         return reinterpret_cast<LRESULT>(theme_background_brush());
     }
     if (message == WM_COMMAND) {
+        const HWND settings = GetParent(window);
+        if (settings) {
+            SendMessageW(settings, message, w_param, l_param);
+        }
+        return 0;
+    }
+    return DefWindowProcW(window, message, w_param, l_param);
+}
+
+LRESULT CALLBACK settings_proc(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    if (message == WM_CREATE) {
+        const auto settings = g_runtime ? g_runtime->settings
+                                        : offline_translator::AppSettings{};
+        // Панель содержимого: все контентные контролы — её дети.
+        g_settings_panel = CreateWindowW(
+            L"TLingSettingsPanel",
+            nullptr,
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+            kSettingsSidebarWidth + 6,
+            0,
+            10,
+            10,
+            window,
+            nullptr,
+            nullptr,
+            nullptr);
+        auto content = [&](int page, const wchar_t* cls, const wchar_t* text,
+                           DWORD style, int x, int y, int w, int h,
+                           int id = 0) -> HWND {
+            HWND control = CreateWindowW(
+                cls,
+                text,
+                WS_CHILD | WS_VISIBLE | style,
+                x,
+                y,
+                w,
+                h,
+                g_settings_panel,
+                id ? reinterpret_cast<HMENU>(static_cast<INT_PTR>(id))
+                   : nullptr,
+                nullptr,
+                nullptr);
+            if (control) {
+                SetPropW(
+                    control,
+                    kSettingsPageProperty,
+                    reinterpret_cast<HANDLE>(static_cast<INT_PTR>(page)));
+            }
+            return control;
+        };
+        // ===== Сайдбар =====
+        const wchar_t* nav_titles[5] = {
+            L"Языки",
+            L"Поведение",
+            L"Темы",
+            L"Язык интерфейса",
+            L"О программе"};
+        for (int index = 0; index < 5; ++index) {
+            g_settings_nav[index] = CreateWindowW(
+                L"BUTTON",
+                nav_titles[index],
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                0,
+                kSettingsNavTop + index * (kSettingsNavHeight + kSettingsNavGap),
+                kSettingsSidebarWidth,
+                kSettingsNavHeight,
+                window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                    kSettingsNavLanguages + index)),
+                nullptr,
+                nullptr);
+            SetWindowSubclass(
+                g_settings_nav[index],
+                flat_button_subclass,
+                1,
+                0);
+        }
+        // ===== Страница «Языки» =====
+        HWND languages_title = content(
+            kSettingsPageLanguages,
+            L"STATIC",
+            L"Движок перевода",
+            0,
+            16,
+            16,
+            300,
+            24);
+        SendMessageW(
+            languages_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        g_settings_engine_combo = content(
+            kSettingsPageLanguages,
+            L"COMBOBOX",
+            nullptr,
+            CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+            16,
+            46,
+            260,
+            200,
+            kSettingsEngineCombo);
+        SendMessageW(
+            g_settings_engine_combo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(L"Argos"));
+        SendMessageW(
+            g_settings_engine_combo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(L"NLLB-200"));
+        SendMessageW(
+            g_settings_engine_combo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(L"Firefox"));
+        SendMessageW(
+            g_settings_engine_combo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(L"MarianMT"));
+        SendMessageW(
+            g_settings_engine_combo,
+            CB_SETCURSEL,
+            engine_combo_index(
+                offline_translator::engine_kind_from_settings(
+                    settings.engine)),
+            0);
+        content(
+            kSettingsPageLanguages,
+            L"STATIC",
+            L"Установка и удаление языковых моделей — в окне «Пакеты».",
+            0,
+            16,
+            84,
+            340,
+            36);
+        content(
+            kSettingsPageLanguages,
+            L"BUTTON",
+            L"Пакеты моделей…",
+            BS_PUSHBUTTON | WS_TABSTOP,
+            16,
+            128,
+            180,
+            28,
+            kSettingsPackagesButton);
+        // ===== Страница «Поведение» =====
+        HWND behavior_title = content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Перевод выделенного текста",
+            0,
+            16,
+            16,
+            340,
+            24);
+        SendMessageW(
+            behavior_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Клавиша удержания для кнопки перевода:",
+            0,
+            16,
+            48,
+            300,
+            18);
+        g_settings_popup_modifier = content(
+            kSettingsPageBehavior,
+            L"COMBOBOX",
+            nullptr,
+            CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+            16,
+            70,
+            240,
+            160,
+            kSettingsPopupModifier);
+        fill_popup_modifier_combo(
+            g_settings_popup_modifier,
+            settings.popup_modifier);
+        g_settings_double_ctrl_c = content(
+            kSettingsPageBehavior,
+            L"BUTTON",
+            L"Переводить выделенный текст по Ctrl+C+C",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            102,
+            470,
+            24,
+            kSettingsDoubleCtrlC);
+        SendMessageW(
+            g_settings_double_ctrl_c,
+            BM_SETCHECK,
+            settings.double_ctrl_c_translation ? BST_CHECKED : BST_UNCHECKED,
+            0);
+        g_settings_only_ctrl_c_c = content(
+            kSettingsPageBehavior,
+            L"BUTTON",
+            L"Только Ctrl+C+C (не показывать кнопку при выделении)",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            130,
+            470,
+            24,
+            kSettingsOnlyCtrlCC);
+        SendMessageW(
+            g_settings_only_ctrl_c_c,
+            BM_SETCHECK,
+            settings.selection_popup_enabled ? BST_UNCHECKED : BST_CHECKED,
+            0);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Ctrl+C+C: удерживайте Ctrl и дважды нажмите C. Перевод появится рядом с курсором. Режим «только Ctrl+C+C» не перехватывает обычные Ctrl+C/Ctrl+V.",
+            0,
+            36,
+            158,
+            440,
+            54);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Окно результата:",
+            0,
+            16,
+            218,
+            300,
+            18);
+        g_settings_click_to_close = content(
+            kSettingsPageBehavior,
+            L"BUTTON",
+            L"Закрывать нажатием по окну",
+            BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
+            16,
+            240,
+            300,
+            22,
+            kSettingsClickToClose);
+        g_settings_selectable = content(
+            kSettingsPageBehavior,
+            L"BUTTON",
+            L"Выделять часть текста; закрывать кнопкой «Закрыть»",
+            BS_AUTORADIOBUTTON | WS_TABSTOP,
+            16,
+            264,
+            420,
+            22,
+            kSettingsSelectable);
+        const bool click_to_close = settings.result_window_mode !=
+            offline_translator::kResultWindowSelectable;
+        SendMessageW(
+            g_settings_click_to_close,
+            BM_SETCHECK,
+            click_to_close ? BST_CHECKED : BST_UNCHECKED,
+            0);
+        SendMessageW(
+            g_settings_selectable,
+            BM_SETCHECK,
+            click_to_close ? BST_UNCHECKED : BST_CHECKED,
+            0);
+        g_settings_auto_copy = content(
+            kSettingsPageBehavior,
+            L"BUTTON",
+            L"Автоматически копировать выделенный текст в буфер обмена",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            294,
+            470,
+            24,
+            kSettingsAutoCopy);
+        SendMessageW(
+            g_settings_auto_copy,
+            BM_SETCHECK,
+            settings.auto_copy_selection ? BST_CHECKED : BST_UNCHECKED,
+            0);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"После выделения текст останется в буфере: его не нужно копировать вручную. Без этой настройки захват для перевода буфер не меняет.",
+            0,
+            36,
+            322,
+            440,
+            54);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Хранить последние копирования (1–50):",
+            0,
+            16,
+            382,
+            280,
+            20);
+        const int history_limit =
+            offline_translator::normalize_clipboard_history_limit(
+                settings.clipboard_history_limit);
+        g_settings_history_limit = content(
+            kSettingsPageBehavior,
+            L"EDIT",
+            std::to_wstring(history_limit).c_str(),
+            WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP,
+            300,
+            378,
+            48,
+            24,
+            kSettingsHistoryLimit);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Горячая клавиша перевода выделения:",
+            0,
+            16,
+            414,
+            300,
+            18);
+        g_settings_hotkey_edit = content(
+            kSettingsPageBehavior,
+            L"EDIT",
+            from_utf8(settings.translate_hotkey).c_str(),
+            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+            16,
+            436,
+            240,
+            24,
+            kSettingsHotkeyEdit);
+        HWND launch_title = content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Запуск",
+            0,
+            16,
+            474,
+            200,
+            26);
+        SendMessageW(
+            launch_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        g_settings_autostart = content(
+            kSettingsPageBehavior,
+            L"BUTTON",
+            L"Запускать вместе с Windows",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            504,
+            400,
+            24,
+            kSettingsAutostart);
+        bool autostart = false;
+        try {
+            autostart = offline_translator::is_app_autostart_enabled();
+        } catch (const std::exception&) {
+        }
+        SendMessageW(
+            g_settings_autostart,
+            BM_SETCHECK,
+            autostart ? BST_CHECKED : BST_UNCHECKED,
+            0);
+        // ===== Страница «Темы» =====
+        HWND themes_title = content(
+            kSettingsPageThemes,
+            L"STATIC",
+            L"Тема оформления",
+            0,
+            16,
+            16,
+            300,
+            26);
+        SendMessageW(
+            themes_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        g_settings_theme_light = content(
+            kSettingsPageThemes,
+            L"BUTTON",
+            L"Светлая",
+            BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
+            16,
+            50,
+            160,
+            22,
+            kSettingsThemeLight);
+        g_settings_theme_dark = content(
+            kSettingsPageThemes,
+            L"BUTTON",
+            L"Тёмная",
+            BS_AUTORADIOBUTTON | WS_TABSTOP,
+            16,
+            76,
+            160,
+            22,
+            kSettingsThemeDark);
+        const bool dark_theme =
+            offline_translator::normalize_ui_theme(settings.ui_theme) ==
+            offline_translator::kUiThemeDark;
+        SendMessageW(
+            g_settings_theme_light,
+            BM_SETCHECK,
+            dark_theme ? BST_UNCHECKED : BST_CHECKED,
+            0);
+        SendMessageW(
+            g_settings_theme_dark,
+            BM_SETCHECK,
+            dark_theme ? BST_CHECKED : BST_UNCHECKED,
+            0);
+        content(
+            kSettingsPageThemes,
+            L"STATIC",
+            L"Тема применяется к главному окну, настройкам и кнопке у курсора.",
+            0,
+            16,
+            108,
+            440,
+            36);
+        HWND language_title = content(
+            kSettingsPageLanguage,
+            L"STATIC",
+            L"Язык интерфейса",
+            0,
+            16,
+            16,
+            300,
+            24);
+        SendMessageW(
+            language_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        g_settings_ui_language = content(
+            kSettingsPageLanguage,
+            L"COMBOBOX",
+            nullptr,
+            CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+            16,
+            52,
+            240,
+            220,
+            kSettingsUiLanguage);
+        content(
+            kSettingsPageLanguage,
+            L"STATIC",
+            L"Язык определяется по языку системы. Изменение применяется сразу.",
+            0,
+            16,
+            96,
+            440,
+            36);
+        SendMessageW(
+            g_settings_ui_language,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(L"Авто (система)"));
+        {
+            int selected_language = 0;
+            int option_index = 1;
+            for (const auto& option :
+                 offline_translator::ui_language_options()) {
+                SendMessageW(
+                    g_settings_ui_language,
+                    CB_ADDSTRING,
+                    0,
+                    reinterpret_cast<LPARAM>(option.label));
+                if (settings.ui_language != "auto" &&
+                    settings.ui_language == option.code) {
+                    selected_language = option_index;
+                }
+                ++option_index;
+            }
+            SendMessageW(
+                g_settings_ui_language,
+                CB_SETCURSEL,
+                selected_language,
+                0);
+        }
+        // ===== Страница «О программе» =====
+        HWND about_title = content(
+            kSettingsPageAbout,
+            L"STATIC",
+            L"О программе",
+            0,
+            16,
+            16,
+            300,
+            26);
+        SendMessageW(
+            about_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        const std::wstring about_version =
+            L"Версия: " +
+            from_utf8(std::string(offline_translator::kAppVersionDisplay));
+        const std::wstring about_author =
+            L"Автор: " +
+            from_utf8(std::string(offline_translator::kAppPublisher));
+        content(
+            kSettingsPageAbout,
+            L"STATIC",
+            about_version.c_str(),
+            0,
+            16,
+            50,
+            470,
+            20);
+        content(
+            kSettingsPageAbout,
+            L"STATIC",
+            about_author.c_str(),
+            0,
+            16,
+            74,
+            470,
+            20);
+        HWND updates_title = content(
+            kSettingsPageAbout,
+            L"STATIC",
+            L"Обновления",
+            0,
+            16,
+            108,
+            300,
+            24);
+        SendMessageW(
+            updates_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        g_settings_update_status = content(
+            kSettingsPageAbout,
+            L"EDIT",
+            L"Проверка не запускалась. Обновления берутся с GitHub.",
+            ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+            16,
+            138,
+            470,
+            56,
+            0);
+        g_settings_check_update = content(
+            kSettingsPageAbout,
+            L"BUTTON",
+            L"Проверить обновления",
+            BS_PUSHBUTTON | WS_TABSTOP,
+            16,
+            202,
+            180,
+            28,
+            kSettingsCheckUpdate);
+        g_settings_install_update = content(
+            kSettingsPageAbout,
+            L"BUTTON",
+            L"Скачать и установить",
+            BS_PUSHBUTTON | WS_DISABLED | WS_TABSTOP,
+            204,
+            202,
+            170,
+            28,
+            kSettingsInstallUpdate);
+        g_settings_open_releases = content(
+            kSettingsPageAbout,
+            L"BUTTON",
+            L"Страница релизов",
+            BS_PUSHBUTTON | WS_TABSTOP,
+            16,
+            238,
+            160,
+            28,
+            kSettingsOpenReleases);
+        // ===== Кнопки фиксированной нижней панели =====
+        g_settings_save = CreateWindowW(
+            L"BUTTON",
+            L"Сохранить",
+            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+            248,
+            660,
+            118,
+            30,
+            window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsSave)),
+            nullptr,
+            nullptr);
+        g_settings_cancel = CreateWindowW(
+            L"BUTTON",
+            L"Отмена",
+            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+            372,
+            660,
+            118,
+            30,
+            window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsCancel)),
+            nullptr,
+            nullptr);
+        apply_theme_to_window(window);
+        g_settings_scroll = 0;
+        g_settings_page = kSettingsPageBehavior;
+        settings_show_page(window, kSettingsPageBehavior);
+        localize_window(window);
+        return 0;
+    }
+    if (message == WM_VSCROLL) {
+        SCROLLINFO info{sizeof(SCROLLINFO)};
+        info.fMask = SIF_ALL;
+        GetScrollInfo(window, SB_VERT, &info);
+        int pos = info.nTrackPos ? info.nTrackPos : info.nPos;
+        switch (LOWORD(w_param)) {
+            case SB_TOP:
+                pos = info.nMin;
+                break;
+            case SB_BOTTOM:
+                pos = info.nMax;
+                break;
+            case SB_LINEUP:
+                pos = info.nPos - kSettingsScrollLine;
+                break;
+            case SB_LINEDOWN:
+                pos = info.nPos + kSettingsScrollLine;
+                break;
+            case SB_PAGEUP:
+                pos = info.nPos - static_cast<int>(info.nPage) -
+                    kSettingsScrollLine;
+                break;
+            case SB_PAGEDOWN:
+                pos = info.nPos + static_cast<int>(info.nPage) +
+                    kSettingsScrollLine;
+                break;
+            case SB_THUMBPOSITION:
+            case SB_THUMBTRACK:
+                pos = info.nTrackPos;
+                break;
+            default:
+                return 0;
+        }
+        settings_apply_scroll(window, pos);
+        return 0;
+    }
+    if (message == WM_MOUSEWHEEL) {
+        const int wheel = GET_WHEEL_DELTA_WPARAM(w_param);
+        if (wheel == 0) {
+            return 0;
+        }
+        SCROLLINFO info{sizeof(SCROLLINFO)};
+        info.fMask = SIF_POS | SIF_PAGE;
+        GetScrollInfo(window, SB_VERT, &info);
+        const int step = static_cast<int>(info.nPage) >= 1
+            ? kSettingsScrollPageLines * kSettingsScrollLine
+            : kSettingsScrollLine;
+        const int pos = info.nPos - (wheel / WHEEL_DELTA) * step;
+        settings_apply_scroll(window, pos);
+        return 0;
+    }
+    if (message == WM_SIZE) {
+        settings_relayout(window);
+        return 0;
+    }
+    if (message == WM_ERASEBKGND) {
+        RECT client{};
+        GetClientRect(window, &client);
+        HDC dc = reinterpret_cast<HDC>(w_param);
+        FillRect(dc, &client, theme_background_brush());
+        // Сайдбар слева с оттенком, отличным от контента.
+        const UiTheme theme = current_ui_theme();
+        const bool dark = is_dark_theme();
+        const COLORREF sidebar = dark ? RGB(40, 40, 46) : RGB(233, 233, 233);
+        RECT side{0, 0, kSettingsSidebarWidth, client.bottom};
+        HBRUSH side_brush = CreateSolidBrush(sidebar);
+        FillRect(dc, &side, side_brush);
+        DeleteObject(side_brush);
+        RECT line{kSettingsSidebarWidth, 0, kSettingsSidebarWidth + 1, client.bottom};
+        HBRUSH line_brush = CreateSolidBrush(theme.border);
+        FillRect(dc, &line, line_brush);
+        DeleteObject(line_brush);
+        return 1;
+    }
+    if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT) {
+        const HDC dc = reinterpret_cast<HDC>(w_param);
+        const UiTheme theme = current_ui_theme();
+        SetBkColor(dc, theme.background);
+        SetTextColor(dc, theme.text);
+        return reinterpret_cast<LRESULT>(theme_background_brush());
+    }
+    if (message == WM_DRAWITEM) {
+        auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
+        if (draw && draw->CtlType == ODT_BUTTON) {
+            int index = -1;
+            for (int item = 0; item < 5; ++item) {
+                if (draw->hwndItem == g_settings_nav[item]) {
+                    index = item;
+                    break;
+                }
+            }
+            if (index < 0) {
+                return DefWindowProcW(window, message, w_param, l_param);
+            }
+            const bool dark = is_dark_theme();
+            const COLORREF sidebar = dark ? RGB(40, 40, 46) : RGB(233, 233, 233);
+            const bool hovered =
+                GetPropW(draw->hwndItem, kHoverPropertyName) != nullptr;
+            const bool active = g_settings_page == index;
+            COLORREF face = sidebar;
+            if (active) {
+                face = current_ui_theme().button_face;
+            } else if (hovered) {
+                face = current_ui_theme().button_hover;
+            }
+            HBRUSH brush = CreateSolidBrush(face);
+            FillRect(draw->hDC, &draw->rcItem, brush);
+            DeleteObject(brush);
+            SetBkMode(draw->hDC, TRANSPARENT);
+            SetTextColor(draw->hDC, current_ui_theme().text);
+            SelectObject(draw->hDC, settings_nav_font(active));
+            RECT text_rect = draw->rcItem;
+            text_rect.left += 14;
+            wchar_t label[64]{};
+            GetWindowTextW(draw->hwndItem, label, 64);
+            DrawTextW(
+                draw->hDC,
+                label,
+                -1,
+                &text_rect,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            return TRUE;
+        }
+    }
+    if (message == WM_COMMAND) {
         const int id = LOWORD(w_param);
-        if (id == kSettingsOnlyCtrlCC && HIWORD(w_param) == BN_CLICKED) {
+        const int notification = HIWORD(w_param);
+        if (id >= kSettingsNavLanguages && id <= kSettingsNavAbout) {
+            settings_show_page(window, id - kSettingsNavLanguages);
+            return 0;
+        }
+        if (id == kSettingsPackagesButton) {
+            open_packages_window(window, window_instance(window));
+            return 0;
+        }
+        if (id == kSettingsEngineCombo && notification == CBN_SELCHANGE) {            const LRESULT engine = SendMessageW(
+                g_settings_engine_combo, CB_GETCURSEL, 0, 0);
+            const wchar_t* names[4] = {
+                L"argos", L"nllb", L"firefox", L"marian"};
+            if (engine >= 0 && engine < 4 && g_runtime) {
+                g_runtime->settings.engine = to_utf8(names[engine]);
+                try {
+                    if (!g_smoke_mode) {
+                        offline_translator::save_settings(g_runtime->settings);
+                    }
+                } catch (const std::exception&) {
+                }
+                if (g_engine_combo) {
+                    SendMessageW(g_engine_combo, CB_SETCURSEL, engine, 0);
+                }
+            }
+            return 0;
+        }
+        if (id == kSettingsUiLanguage && notification == CBN_SELCHANGE &&
+            g_runtime) {
+            const LRESULT selected = SendMessageW(
+                g_settings_ui_language, CB_GETCURSEL, 0, 0);
+            std::string code = "auto";
+            const auto& options = offline_translator::ui_language_options();
+            if (selected > 0 &&
+                static_cast<std::size_t>(selected - 1) < options.size()) {
+                code = options[static_cast<std::size_t>(selected - 1)].code;
+            }
+            g_runtime->settings.ui_language = code;
+            offline_translator::set_ui_language(code);
+            try {
+                if (!g_smoke_mode) {
+                    offline_translator::save_settings(g_runtime->settings);
+                }
+            } catch (const std::exception&) {
+            }
+            // Меняем язык открытых окон, трея и списка пакетов.
+            if (g_package_caption) {
+                refresh_package_list();
+            }
+            relocalize_all();
+            if (g_runtime->main_window) {
+                RedrawWindow(
+                    g_runtime->main_window,
+                    nullptr,
+                    nullptr,
+                    RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
+            }
+            return 0;
+        }
+        if (id == kSettingsOnlyCtrlCC && notification == BN_CLICKED) {
             if (SendMessageW(g_settings_only_ctrl_c_c, BM_GETCHECK, 0, 0) ==
                 BST_CHECKED) {
                 SendMessageW(
@@ -3032,6 +4592,43 @@ LRESULT CALLBACK settings_proc(
             close_settings_window();
             return 0;
         }
+        if (id == kSettingsCheckUpdate) {
+            start_update_check();
+            return 0;
+        }
+        if (id == kSettingsInstallUpdate) {
+            start_update_install();
+            return 0;
+        }
+        if (id == kSettingsOpenReleases) {
+            open_releases_page();
+            return 0;
+        }
+    }
+    if (message == kUpdateCheckDoneMessage) {
+        std::unique_ptr<UpdateCheckPayload> payload(
+            reinterpret_cast<UpdateCheckPayload*>(l_param));
+        g_pending_update = payload->info;
+        set_update_status(payload->text);
+        set_update_controls_busy(false);
+        return 0;
+    }
+    if (message == kUpdateInstallDoneMessage) {
+        std::unique_ptr<UpdateInstallPayload> payload(
+            reinterpret_cast<UpdateInstallPayload*>(l_param));
+        set_update_status(payload->text);
+        set_update_controls_busy(false);
+        if (!payload->failed && payload->quit && g_runtime && g_runtime->main_window) {
+            auto* forwarded = new UpdateInstallPayload(*payload);
+            if (!PostMessageW(
+                    g_runtime->main_window,
+                    kUpdateInstallDoneMessage,
+                    0,
+                    reinterpret_cast<LPARAM>(forwarded))) {
+                delete forwarded;
+            }
+        }
+        return 0;
     }
     if (message == WM_CLOSE) {
         close_settings_window();
@@ -3041,24 +4638,48 @@ LRESULT CALLBACK settings_proc(
         if (g_runtime && g_runtime->settings_window == window) {
             g_runtime->settings_window = nullptr;
         }
+        g_settings_panel = nullptr;
+        g_settings_save = nullptr;
+        g_settings_cancel = nullptr;
+        g_settings_engine_combo = nullptr;
+        for (int index = 0; index < 5; ++index) {
+            g_settings_nav[index] = nullptr;
+        }
         return 0;
     }
     return DefWindowProcW(window, message, w_param, l_param);
 }
 
-void open_settings_window(HWND parent, HINSTANCE instance) {
+void open_settings_window(HWND parent, HINSTANCE instance, bool check_updates) {
     if (g_runtime && g_runtime->settings_window) {
         SetForegroundWindow(g_runtime->settings_window);
+        if (check_updates) {
+            start_update_check();
+        }
         return;
     }
+    // Высота не больше рабочей области: на небольших экранах окно
+    // ужимается, а недостающее добирает скроллбар.
+    RECT work_area{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0);
+    const int window_height = std::min(800, static_cast<int>(work_area.bottom - work_area.top));
+    // Центрируем в рабочей области: CW_USEDEFAULT может утопить низ
+    // окна под панель задач, и кнопки низа становятся недоступны.
+    int window_x = work_area.left +
+        ((work_area.right - work_area.left) - 900) / 2;
+    if (window_x < work_area.left) {
+        window_x = work_area.left;
+    }
+    int window_y = work_area.top +
+        (static_cast<int>(work_area.bottom - work_area.top) - window_height) / 2;
     HWND settings = CreateWindowW(
-        L"OfflineTranslatorSettings",
+        L"TLingSettings",
         L"Настройки",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        520,
-        600,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VSCROLL,
+        window_x,
+        window_y,
+        900,
+        window_height,
         parent,
         nullptr,
         instance,
@@ -3072,6 +4693,9 @@ void open_settings_window(HWND parent, HINSTANCE instance) {
     EnableWindow(parent, FALSE);
     ShowWindow(settings, SW_SHOW);
     UpdateWindow(settings);
+    if (check_updates) {
+        start_update_check();
+    }
 }
 
 void create_main_controls(HWND window) {
@@ -3266,7 +4890,8 @@ void close_packages_window() {
         return;
     }
     HWND packages = g_runtime->packages_window;
-    HWND main = g_runtime->main_window;
+    HWND main = g_packages_parent ? g_packages_parent : g_runtime->main_window;
+    g_packages_parent = nullptr;
     g_runtime->packages_window = nullptr;
     g_package_list = nullptr;
     g_package_install = nullptr;
@@ -3286,7 +4911,7 @@ LRESULT CALLBACK packages_proc(
     LPARAM l_param) {
     try {
         if (message == WM_CREATE) {
-            CreateWindowW(
+            g_package_caption = CreateWindowW(
                 L"STATIC",
                 L"Установленные и доступные языковые пакеты:",
                 WS_VISIBLE | WS_CHILD,
@@ -3334,14 +4959,16 @@ LRESULT CALLBACK packages_proc(
                 g_package_search,
                 EM_SETCUEBANNER,
                 TRUE,
-                reinterpret_cast<LPARAM>(L"код или язык: ru, немецкий..."));
+                reinterpret_cast<LPARAM>(
+                    offline_translator::tr(L"код или язык: ru, немецкий...")
+                        .c_str()));
             g_package_arch_caption = CreateWindowW(
                 L"STATIC",
-                L"Размер моделей:",
+                L"Размер:",
                 WS_CHILD,  // показывается только для движка Firefox
-                250,
+                240,
                 15,
-                110,
+                56,
                 20,
                 window,
                 nullptr,
@@ -3351,9 +4978,9 @@ LRESULT CALLBACK packages_proc(
                 L"COMBOBOX",
                 nullptr,
                 WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
-                364,
+                302,
                 11,
-                120,
+                148,
                 160,
                 window,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(
@@ -3430,6 +5057,7 @@ LRESULT CALLBACK packages_proc(
                 nullptr);
             refresh_package_list();
             apply_theme_to_window(window);
+            localize_window(window);
             std::thread([window]() {
                 if (selected_engine() ==
                     offline_translator::EngineKind::marian) {
@@ -3476,8 +5104,10 @@ LRESULT CALLBACK packages_proc(
             static_cast<void>(payload);
             return 0;
         }
-        if (message == WM_COMMAND) {
-            const int id = LOWORD(w_param);
+    if (message == WM_COMMAND) {
+        const int id = LOWORD(w_param);
+        offline_translator::app_log_info(
+            "popup: WM_COMMAND id=" + std::to_string(id));
             const int notification = HIWORD(w_param);
             if (id == kPackageCloseButton) {
                 close_packages_window();
@@ -3527,7 +5157,7 @@ LRESULT CALLBACK packages_proc(
                 SetWindowTextW(g_package_status, payload->text.c_str());
             }
             if (payload->failed) {
-                MessageBoxW(
+                localized_message_box(
                     window,
                     payload->text.c_str(),
                     L"Ошибка пакета",
@@ -3537,7 +5167,7 @@ LRESULT CALLBACK packages_proc(
         }
         if (message == WM_CLOSE) {
             if (g_runtime && g_runtime->packages_busy) {
-                MessageBoxW(
+                localized_message_box(
                     window,
                     L"Дождитесь окончания установки или удаления.",
                     L"Пакеты",
@@ -3555,13 +5185,14 @@ LRESULT CALLBACK packages_proc(
             g_package_search = nullptr;
             g_package_arch_caption = nullptr;
             g_package_arch_combo = nullptr;
+            g_package_caption = nullptr;
             if (g_runtime && g_runtime->packages_window == window) {
                 g_runtime->packages_window = nullptr;
             }
             return 0;
         }
     } catch (const std::exception& error) {
-        MessageBoxW(
+        localized_message_box(
             window,
             from_utf8(error.what()).c_str(),
             L"Ошибка",
@@ -3577,7 +5208,7 @@ void open_packages_window(HWND parent, HINSTANCE instance) {
         return;
     }
     HWND packages = CreateWindowW(
-        L"OfflineTranslatorPackages",
+        L"TLingPackages",
         L"Пакеты моделей",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
         CW_USEDEFAULT,
@@ -3594,6 +5225,9 @@ void open_packages_window(HWND parent, HINSTANCE instance) {
     if (g_runtime) {
         g_runtime->packages_window = packages;
     }
+    // Родитель запоминаем: окно пакетов открывается и из главного окна,
+    // и из настроек — разблокировать надо именно того, кто блокировался.
+    g_packages_parent = parent;
     EnableWindow(parent, FALSE);
     ShowWindow(packages, SW_SHOW);
     UpdateWindow(packages);
@@ -3607,6 +5241,7 @@ LRESULT CALLBACK window_proc(
     try {
         if (message == WM_CREATE) {
             create_main_controls(window);
+            localize_window(window);
             if (!g_smoke_mode) {
                 SetTimer(window, kSelectionPollTimer, 40, nullptr);
             }
@@ -3690,9 +5325,11 @@ LRESULT CALLBACK window_proc(
                         &mark,
                         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 }
+                const std::wstring tray_label = offline_translator::tr(
+                    tray_menu_label(static_cast<UINT>(draw->itemID)));
                 DrawTextW(
                     draw->hDC,
-                    tray_menu_label(static_cast<UINT>(draw->itemID)),
+                    tray_label.c_str(),
                     -1,
                     &text_bounds,
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -3738,6 +5375,69 @@ LRESULT CALLBACK window_proc(
             }
             return 0;
         }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayAutoCopy) {
+            if (g_runtime) {
+                const bool enabled = !g_runtime->settings.auto_copy_selection;
+                g_runtime->settings.auto_copy_selection = enabled;
+                try {
+                    if (!g_smoke_mode) {
+                        offline_translator::save_settings(g_runtime->settings);
+                    }
+                } catch (const std::exception&) {
+                }
+                // Синхронизируем галочку в настройках, если окно открыто.
+                if (g_settings_auto_copy) {
+                    SendMessageW(
+                        g_settings_auto_copy,
+                        BM_SETCHECK,
+                        enabled ? BST_CHECKED : BST_UNCHECKED,
+                        0);
+                }
+                set_status(
+                    offline_translator::tr(
+                        enabled ? L"Автокопирование включено"
+                                : L"Автокопирование выключено"));
+                offline_translator::app_log_info(
+                    std::string("трей: автокопирование ") +
+                    (enabled ? "включено" : "выключено"));
+            }
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
+            open_settings_window(window, window_instance(window), true);
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayHistoryClear) {
+            try {
+                offline_translator::clear_clipboard_history();
+            } catch (const std::exception&) {
+            }
+            g_tray_history_items.clear();
+            g_tray_history_labels.clear();
+            return 0;
+        }
+        if (message == WM_COMMAND) {
+            const UINT command_id = LOWORD(w_param);
+            if (command_id >= kTrayHistoryFirst &&
+                command_id <= kTrayHistoryLast) {
+                const std::size_t index =
+                    static_cast<std::size_t>(command_id - kTrayHistoryFirst);
+                if (index < g_tray_history_items.size()) {
+                    copy_text_to_clipboard(window, g_tray_history_items[index]);
+                }
+                return 0;
+            }
+            if (command_id >= kTrayHistoryTranslateFirst &&
+                command_id <= kTrayHistoryTranslateLast) {
+                const std::size_t index = static_cast<std::size_t>(
+                    command_id - kTrayHistoryTranslateFirst);
+                if (index < g_tray_history_items.size()) {
+                    g_selection.selected_text = g_tray_history_items[index];
+                    start_selection_translation(window);
+                }
+                return 0;
+            }
+        }
         if (message == WM_COMMAND &&
             (LOWORD(w_param) == kEngineCombo ||
              LOWORD(w_param) == kSourceLanguageCombo ||
@@ -3770,6 +5470,16 @@ LRESULT CALLBACK window_proc(
             std::unique_ptr<StatusPayload> payload(
                 reinterpret_cast<StatusPayload*>(l_param));
             set_status(payload->text);
+            return 0;
+        }
+        if (message == kUpdateInstallDoneMessage) {
+            std::unique_ptr<UpdateInstallPayload> payload(
+                reinterpret_cast<UpdateInstallPayload*>(l_param));
+            set_status(payload->text);
+            set_update_controls_busy(false);
+            if (!payload->failed && payload->quit) {
+                DestroyWindow(window);
+            }
             return 0;
         }
         if (message == kTranslateMessage) {
@@ -3877,7 +5587,7 @@ LRESULT CALLBACK window_proc(
     } catch (const std::exception& error) {
         offline_translator::app_log_error(
             std::string("исключение окна: ") + error.what());
-        MessageBoxW(
+        localized_message_box(
             window,
             from_utf8(error.what()).c_str(),
             L"Ошибка",
@@ -3923,6 +5633,69 @@ int run_smoke_loop(HWND window) {
     if (!g_engine_combo || !g_source_language_combo ||
         !g_target_language_combo || !g_translate_button ||
         !g_packages_button || !g_settings_button) {
+        return 1;
+    }
+    // Окно настроек: создание, скроллбар, прокрутка и закрытие.
+    SendMessageW(window, WM_COMMAND, kSettingsButton, 0);
+    for (int step = 0; step < 20; ++step) {
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT) {
+                return static_cast<int>(message.wParam);
+            }
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        Sleep(10);
+    }
+    if (!g_runtime || !g_runtime->settings_window) {
+        return 1;
+    }
+    if (!(GetWindowLongPtrW(g_runtime->settings_window, GWL_STYLE) & WS_VSCROLL)) {
+        return 1;
+    }
+    // Уменьшаем окно: клиент ниже контента — должен работать скроллбар.
+    SetWindowPos(
+        g_runtime->settings_window,
+        nullptr,
+        0,
+        0,
+        520,
+        420,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    for (int step = 0; step < 10; ++step) {
+        MSG pump{};
+        while (PeekMessageW(&pump, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&pump);
+            DispatchMessageW(&pump);
+        }
+        Sleep(10);
+    }
+    SendMessageW(
+        g_runtime->settings_window,
+        WM_VSCROLL,
+        MAKEWPARAM(SB_PAGEDOWN, 0),
+        0);
+    for (int step = 0; step < 10; ++step) {
+        MSG pump{};
+        while (PeekMessageW(&pump, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&pump);
+            DispatchMessageW(&pump);
+        }
+        Sleep(10);
+    }
+    if (g_settings_scroll <= 0) {
+        return 1;
+    }
+    SendMessageW(g_runtime->settings_window, WM_CLOSE, 0, 0);
+    for (int step = 0; step < 20; ++step) {
+        MSG pump{};
+        while (PeekMessageW(&pump, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&pump);
+            DispatchMessageW(&pump);
+        }
+        Sleep(10);
+    }
+    if (IsWindow(g_runtime->settings_window) || g_settings_scroll != 0) {
         return 1;
     }
     DestroyWindow(window);
@@ -4042,11 +5815,40 @@ int WINAPI wWinMain(
     if (!g_smoke_mode) {
         offline_translator::init_app_log();
         offline_translator::app_log_info(
-            "инициализация журнала " +
-            to_utf8(offline_translator::app_log_path().wstring()));
+            "=== старт " +
+            std::string(offline_translator::kAppVersion) +
+            " pid=" + std::to_string(GetCurrentProcessId()) +
+            " exe=" + to_utf8(executable_path().wstring()) +
+            " home=" + to_utf8(
+                offline_translator::default_data_root().wstring()));
     }
 
-    const wchar_t class_name[] = L"OfflineTranslatorWindow";
+    // Один экземпляр на пользователя: старый процесс из другой папки
+    // (автозапуск/трей) иначе продолжает перехватывать жесты и показывать
+    // своё окно результата со старыми ошибками.
+    HANDLE single_instance = nullptr;
+    if (!g_smoke_mode) {
+        single_instance = CreateMutexW(
+            nullptr,
+            TRUE,
+            L"Local\\TLingSingleInstance");
+        if (single_instance &&
+            GetLastError() == ERROR_ALREADY_EXISTS) {
+            offline_translator::app_log_warn(
+                "уже запущен другой экземпляр — показываю его окно и выходим");
+            if (HWND existing = FindWindowW(
+                    L"TLingWindow", nullptr)) {
+                ShowWindow(existing, SW_RESTORE);
+                SetForegroundWindow(existing);
+            }
+            CloseHandle(single_instance);
+            return 0;
+        }
+    }
+
+
+
+    const wchar_t class_name[] = L"TLingWindow";
     WNDCLASSW window_class{};
     window_class.hInstance = instance;
     window_class.lpfnWndProc = window_proc;
@@ -4063,7 +5865,7 @@ int WINAPI wWinMain(
     WNDCLASSW packages_class{};
     packages_class.hInstance = instance;
     packages_class.lpfnWndProc = packages_proc;
-    packages_class.lpszClassName = L"OfflineTranslatorPackages";
+    packages_class.lpszClassName = L"TLingPackages";
     packages_class.hCursor = LoadCursorW(
         nullptr,
         MAKEINTRESOURCEW(IDC_ARROW));
@@ -4076,7 +5878,7 @@ int WINAPI wWinMain(
     WNDCLASSW settings_class{};
     settings_class.hInstance = instance;
     settings_class.lpfnWndProc = settings_proc;
-    settings_class.lpszClassName = L"OfflineTranslatorSettings";
+    settings_class.lpszClassName = L"TLingSettings";
     settings_class.hCursor = LoadCursorW(
         nullptr,
         MAKEINTRESOURCEW(IDC_ARROW));
@@ -4085,10 +5887,22 @@ int WINAPI wWinMain(
         return 1;
     }
 
+    WNDCLASSW settings_panel_class{};
+    settings_panel_class.hInstance = instance;
+    settings_panel_class.lpfnWndProc = settings_panel_proc;
+    settings_panel_class.lpszClassName = L"TLingSettingsPanel";
+    settings_panel_class.hCursor = LoadCursorW(
+        nullptr,
+        MAKEINTRESOURCEW(IDC_ARROW));
+    settings_panel_class.hbrBackground = nullptr;
+    if (!RegisterClassW(&settings_panel_class)) {
+        return 1;
+    }
+
     WNDCLASSW selection_class{};
     selection_class.hInstance = instance;
     selection_class.lpfnWndProc = selection_button_proc;
-    selection_class.lpszClassName = L"OfflineTranslatorSelectionButton";
+    selection_class.lpszClassName = L"TLingSelectionButton";
     selection_class.hCursor = LoadCursorW(
         nullptr,
         MAKEINTRESOURCEW(IDC_HAND));
@@ -4100,7 +5914,7 @@ int WINAPI wWinMain(
     WNDCLASSW result_class{};
     result_class.hInstance = instance;
     result_class.lpfnWndProc = result_popup_proc;
-    result_class.lpszClassName = L"OfflineTranslatorResultPopup";
+    result_class.lpszClassName = L"TLingResultPopup";
     result_class.hCursor = LoadCursorW(
         nullptr,
         MAKEINTRESOURCEW(IDC_ARROW));
@@ -4110,6 +5924,15 @@ int WINAPI wWinMain(
     }
 
     const auto settings = offline_translator::load_settings();
+    offline_translator::set_ui_language(settings.ui_language);
+    offline_translator::app_log_info(
+        "настройки: engine=" + settings.engine +
+        " lang=" + settings.ui_language +
+        " modifier=" + settings.popup_modifier +
+        " popup=" + std::to_string(settings.selection_popup_enabled) +
+        " auto_copy=" + std::to_string(settings.auto_copy_selection) +
+        " result=" + settings.result_window_mode +
+        " theme=" + settings.ui_theme);
     const int width = settings.window_width >= kMinWindowWidth
         ? settings.window_width
         : kDefaultWindowWidth;
@@ -4119,7 +5942,7 @@ int WINAPI wWinMain(
 
     HWND window = CreateWindowW(
         class_name,
-        L"Offline Translator C++",
+        L"TLing",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -4142,7 +5965,7 @@ int WINAPI wWinMain(
         const std::wstring warning =
             L"Не удалось зарегистрировать горячую клавишу " +
             from_utf8(settings.translate_hotkey) + L".";
-        MessageBoxW(
+        localized_message_box(
             window,
             warning.c_str(),
             L"Предупреждение",

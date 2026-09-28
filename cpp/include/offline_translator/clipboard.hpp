@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <functional>
 #include <string>
@@ -58,18 +58,22 @@ private:
 };
 
 // Копирует выделение через callback (в GUI — SendInput Ctrl+C), затем
-// всегда возвращает прежний буфер. Пустое выделение и совпадение с
-// сторожевой меткой считаются неудачей.
+// возвращает прежний буфер, если keep_in_clipboard == false.
 std::wstring capture_selected_text(
     Clipboard& clipboard,
     const std::function<void()>& copy_selection,
-    std::wstring_view sentinel = L"__ot_sel_test__");
+    std::wstring_view sentinel = L"__ot_sel_test__",
+    bool keep_in_clipboard = false);
 
 #ifdef _WIN32
 void send_copy_keyboard_shortcut();
 // Если Ctrl уже нажат пользователем, отпускать его нельзя — ломает Ctrl+V.
 void send_copy_keyboard_shortcut(bool ctrl_already_down);
-std::wstring capture_selected_text_win32(void* owner_hwnd = nullptr);
+void send_paste_keyboard_shortcut();
+void send_paste_keyboard_shortcut(bool ctrl_already_down);
+std::wstring capture_selected_text_win32(
+    void* owner_hwnd = nullptr,
+    bool keep_in_clipboard = false);
 
 // Ожидание внутри capture_selected_text_win32. GUI подменяет на вариант,
 // который прокачивает сообщения: иначе инжектированный Ctrl+C не будет

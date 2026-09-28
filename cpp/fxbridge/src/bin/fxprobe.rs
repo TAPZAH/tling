@@ -1,4 +1,4 @@
-use std::path::Path;
+﻿use std::path::Path;
 
 fn main() {
     let mut args = std::env::args().skip(1);

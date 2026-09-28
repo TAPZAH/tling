@@ -1,4 +1,4 @@
-#include "offline_translator/window_policy.hpp"
+﻿#include "offline_translator/window_policy.hpp"
 
 namespace offline_translator {
 

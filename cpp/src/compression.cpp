@@ -1,4 +1,4 @@
-#include "compression.hpp"
+﻿#include "compression.hpp"
 
 #include <zconf.h>
 #include <zlib.h>

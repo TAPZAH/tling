@@ -1,4 +1,4 @@
-#include "offline_translator/argos_engine.hpp"
+﻿#include "offline_translator/argos_engine.hpp"
 
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/ctranslate2_engine.hpp"

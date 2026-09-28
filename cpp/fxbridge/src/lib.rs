@@ -1,4 +1,4 @@
-//! C-ABI мост между C++-ядром Offline Translator и нативным Rust-движком
+﻿//! C-ABI мост между C++-ядром TLing и нативным Rust-движком
 //! fxtranslate (Firefox Translations).
 //!
 //! Гарантия потоков: Engine крейта привязан к создавшему потоку, поэтому

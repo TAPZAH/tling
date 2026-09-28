@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "offline_translator/ctranslate2_engine.hpp"
 

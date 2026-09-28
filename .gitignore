@@ -1,25 +1,16 @@
-__pycache__/
-*.py[cod]
-*.pyo
-dist/
-installer-dist/
-build/
-release/*.zip
-release/*.exe
-*.zip
-.venv/
-venv/
-*.egg-info/
-.pytest_cache/
-
-# C++ portable / installer output (модели и DLL не в git)
-cpp/portable-win32/
-cpp/portable-win32-lite/
-cpp/portable-win32-full/
-cpp/installer-output/
-
-# Каталоги CMake/MSVC (воспроизводятся cmake --build)
+﻿# Build-артефакты C++ (кэши CMake/MSVC, портативы, установщик)
 cpp/build-*/
+cpp/portable*/
+cpp/portable/
+cpp/installer-output/
 
 # Rust-артефакты моста fxtranslate
 cpp/fxbridge/target/
+
+# Релизные архивы
+release/
+*.zip
+*.exe
+
+# Локальные настройки IDE
+.vscode/

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+﻿cmake_minimum_required(VERSION 3.20)
 project(offline_translator_core LANGUAGES CXX)
 
 if (POLICY CMP0144)
@@ -10,22 +10,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(nlohmann_json CONFIG REQUIRED)
-option(ENABLE_CTRANSLATE2 "Подключить собранный CTranslate2" OFF)
-set(CTranslate2_ROOT "" CACHE PATH "Корень исходников и сборки CTranslate2")
-set(CTranslate2_BUILD_DIR "" CACHE PATH "Каталог CMake-сборки CTranslate2")
+option(ENABLE_CTRANSLATE2 "РџРѕРґРєР»СЋС‡РёС‚СЊ СЃРѕР±СЂР°РЅРЅС‹Р№ CTranslate2" OFF)
+set(CTranslate2_ROOT "" CACHE PATH "РљРѕСЂРµРЅСЊ РёСЃС…РѕРґРЅРёРєРѕРІ Рё СЃР±РѕСЂРєРё CTranslate2")
+set(CTranslate2_BUILD_DIR "" CACHE PATH "РљР°С‚Р°Р»РѕРі CMake-СЃР±РѕСЂРєРё CTranslate2")
 
 if (ENABLE_CTRANSLATE2)
     if (NOT CTranslate2_ROOT)
-        message(FATAL_ERROR "Для ENABLE_CTRANSLATE2 укажите CTranslate2_ROOT")
+        message(FATAL_ERROR "Р”Р»СЏ ENABLE_CTRANSLATE2 СѓРєР°Р¶РёС‚Рµ CTranslate2_ROOT")
     endif()
     if (NOT CTranslate2_BUILD_DIR)
         set(CTranslate2_BUILD_DIR
             "${CTranslate2_ROOT}/build-openblas-dnnl/ctranslate2")
     endif()
-    # find_package иначе может взять закэшированный CTranslate2_DIR
-    # от другой сборки (например C:/deps/CTranslate2/build без OpenBLAS).
+    # find_package РёРЅР°С‡Рµ РјРѕР¶РµС‚ РІР·СЏС‚СЊ Р·Р°РєСЌС€РёСЂРѕРІР°РЅРЅС‹Р№ CTranslate2_DIR
+    # РѕС‚ РґСЂСѓРіРѕР№ СЃР±РѕСЂРєРё (РЅР°РїСЂРёРјРµСЂ C:/deps/CTranslate2/build Р±РµР· OpenBLAS).
     set(CTranslate2_DIR "${CTranslate2_BUILD_DIR}" CACHE PATH
-        "Каталог CTranslate2Config.cmake" FORCE)
+        "РљР°С‚Р°Р»РѕРі CTranslate2Config.cmake" FORCE)
     find_package(CTranslate2 CONFIG REQUIRED
         PATHS "${CTranslate2_BUILD_DIR}"
         NO_DEFAULT_PATH
@@ -33,7 +33,7 @@ if (ENABLE_CTRANSLATE2)
     get_target_property(_ctranslate2_dll
         CTranslate2::ctranslate2 IMPORTED_LOCATION_RELEASE)
     message(STATUS "CTranslate2 DLL: ${_ctranslate2_dll}")
-    # oneDNN рядом с этой сборкой CTranslate2 даёт эффективный int8 для NLLB.
+    # oneDNN СЂСЏРґРѕРј СЃ СЌС‚РѕР№ СЃР±РѕСЂРєРѕР№ CTranslate2 РґР°С‘С‚ СЌС„С„РµРєС‚РёРІРЅС‹Р№ int8 РґР»СЏ NLLB.
     if (NOT DNNL_DLL)
         get_filename_component(_ct2_install_root
             "${_ctranslate2_dll}" DIRECTORY)
@@ -76,12 +76,15 @@ if (ENABLE_CTRANSLATE2)
 endif()
 
 add_library(offline_translator_core
+    src/app_language.cpp
     src/app_log.cpp
     src/app_settings.cpp
+    src/app_update.cpp
     src/argos_engine.cpp
     src/argos_model_manager.cpp
     src/autostart.cpp
     src/clipboard.cpp
+    src/clipboard_history.cpp
     src/compression.cpp
     src/file_transfer.cpp
     src/firefox_engine.cpp
@@ -109,7 +112,7 @@ target_link_libraries(offline_translator_core
     PUBLIC nlohmann_json::nlohmann_json
     PRIVATE ZLIB::ZLIB zstd::libzstd
 )
-# DLL для деплоя: zlib из импортной цели, zstd — интерфейсная, ищем файлом.
+# DLL РґР»СЏ РґРµРїР»РѕСЏ: zlib РёР· РёРјРїРѕСЂС‚РЅРѕР№ С†РµР»Рё, zstd вЂ” РёРЅС‚РµСЂС„РµР№СЃРЅР°СЏ, РёС‰РµРј С„Р°Р№Р»РѕРј.
 set(_manifest_bin "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")
 get_target_property(_zlib_dll ZLIB::ZLIB IMPORTED_LOCATION_RELEASE)
 if (NOT _zlib_dll)
@@ -149,7 +152,7 @@ if (ENABLE_CTRANSLATE2)
         tools/firefox_smoke.cpp
     )
     if (WIN32)
-        add_executable(offline_translator_win32 WIN32
+        add_executable(TLing WIN32
             app/win32_main.cpp
         )
     endif()
@@ -181,7 +184,7 @@ if (ENABLE_CTRANSLATE2)
             offline_translator_core
     )
     if (WIN32)
-        target_include_directories(offline_translator_win32
+        target_include_directories(TLing
             PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/include
         )
@@ -239,7 +242,7 @@ if (ENABLE_CTRANSLATE2)
             absl::flags
     )
     if (WIN32)
-        target_link_libraries(offline_translator_win32
+        target_link_libraries(TLing
             PRIVATE
                 offline_translator_core
                 CTranslate2::ctranslate2
@@ -255,42 +258,70 @@ if (ENABLE_CTRANSLATE2)
                 shell32
                 gdi32
                 comctl32
+                dwmapi
         )
         set(_app_ico "${CMAKE_CURRENT_SOURCE_DIR}/../assets/app.ico")
         if (EXISTS "${_app_ico}")
-            add_custom_command(TARGET offline_translator_win32 POST_BUILD
+            add_custom_command(TARGET TLing POST_BUILD
                 COMMAND "${CMAKE_COMMAND}" -E make_directory
-                    "$<TARGET_FILE_DIR:offline_translator_win32>/assets"
+                    "$<TARGET_FILE_DIR:TLing>/assets"
                 COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                     "${_app_ico}"
-                    "$<TARGET_FILE_DIR:offline_translator_win32>/assets/app.ico"
-                COMMENT "Копирование assets/app.ico рядом с GUI"
+                    "$<TARGET_FILE_DIR:TLing>/assets/app.ico"
+                COMMENT "РљРѕРїРёСЂРѕРІР°РЅРёРµ assets/app.ico СЂСЏРґРѕРј СЃ GUI"
             )
         endif()
         set(_fxbridge_dll "${CMAKE_CURRENT_SOURCE_DIR}/fxbridge/target/release/fxbridge.dll")
-        if (EXISTS "${_fxbridge_dll}")
+        # РЎР±РѕСЂРєР° РјРѕСЃС‚Р° Firefox: cargo, РµСЃР»Рё СѓСЃС‚Р°РЅРѕРІР»РµРЅ; РёРЅР°С‡Рµ РіРѕС‚РѕРІС‹Р№ DLL.
+        find_program(CARGO_EXECUTABLE cargo)
+        if (CARGO_EXECUTABLE)
+            add_custom_target(fxbridge_dll
+                COMMAND "${CARGO_EXECUTABLE}" build --release
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/fxbridge"
+                BYPRODUCTS "${_fxbridge_dll}"
+                COMMENT "cargo build --release (fxbridge)"
+                VERBATIM
+            )
             foreach (_bridge_target IN ITEMS
-                offline_translator_win32
+                TLing
+                firefox_smoke
+            )
+                add_dependencies(${_bridge_target} fxbridge_dll)
+                add_custom_command(TARGET ${_bridge_target} POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${_fxbridge_dll}"
+                        "$<TARGET_FILE_DIR:${_bridge_target}>/fxbridge.dll"
+                    COMMENT "РљРѕРїРёСЂРѕРІР°РЅРёРµ fxbridge.dll СЂСЏРґРѕРј СЃ ${_bridge_target}"
+                )
+            endforeach()
+        elseif (EXISTS "${_fxbridge_dll}")
+            message(STATUS "cargo РЅРµ РЅР°Р№РґРµРЅ вЂ” РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РіРѕС‚РѕРІС‹Р№ fxbridge.dll")
+            foreach (_bridge_target IN ITEMS
+                TLing
                 firefox_smoke
             )
                 add_custom_command(TARGET ${_bridge_target} POST_BUILD
                     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                         "${_fxbridge_dll}"
                         "$<TARGET_FILE_DIR:${_bridge_target}>/fxbridge.dll"
-                    COMMENT "Копирование fxbridge.dll рядом с ${_bridge_target}"
+                    COMMENT "РљРѕРїРёСЂРѕРІР°РЅРёРµ fxbridge.dll СЂСЏРґРѕРј СЃ ${_bridge_target}"
                 )
             endforeach()
+        else()
+            message(WARNING
+                "РќРё cargo, РЅРё РіРѕС‚РѕРІРѕРіРѕ fxbridge.dll РЅРµС‚ вЂ” РґРІРёР¶РѕРє Firefox "
+                "РЅРµ Р·Р°СЂР°Р±РѕС‚Р°РµС‚. РЈСЃС‚Р°РЅРѕРІРёС‚Рµ Rust РёР»Рё СЃРѕР±РµСЂРёС‚Рµ cpp/fxbridge.")
         endif()
         foreach (_icon_png IN ITEMS icon.png icon-light.png icon-dark.png)
             set(_selection_png "${CMAKE_CURRENT_SOURCE_DIR}/../assets/${_icon_png}")
             if (EXISTS "${_selection_png}")
-                add_custom_command(TARGET offline_translator_win32 POST_BUILD
+                add_custom_command(TARGET TLing POST_BUILD
                     COMMAND "${CMAKE_COMMAND}" -E make_directory
-                        "$<TARGET_FILE_DIR:offline_translator_win32>/assets"
+                        "$<TARGET_FILE_DIR:TLing>/assets"
                     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                         "${_selection_png}"
-                        "$<TARGET_FILE_DIR:offline_translator_win32>/assets/${_icon_png}"
-                    COMMENT "Копирование assets/${_icon_png} рядом с GUI"
+                        "$<TARGET_FILE_DIR:TLing>/assets/${_icon_png}"
+                    COMMENT "РљРѕРїРёСЂРѕРІР°РЅРёРµ assets/${_icon_png} СЂСЏРґРѕРј СЃ GUI"
                 )
             endif()
         endforeach()
@@ -334,7 +365,7 @@ if (ENABLE_CTRANSLATE2)
         endif()
         if (NOT OpenBLAS_DLL)
             message(FATAL_ERROR
-                "Не найден openblas.dll. Укажите OpenBLAS_DLL или установите OpenBLAS в vcpkg.")
+                "РќРµ РЅР°Р№РґРµРЅ openblas.dll. РЈРєР°Р¶РёС‚Рµ OpenBLAS_DLL РёР»Рё СѓСЃС‚Р°РЅРѕРІРёС‚Рµ OpenBLAS РІ vcpkg.")
         endif()
         set(_vcpkg_bin_search
             "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin"
@@ -353,7 +384,7 @@ if (ENABLE_CTRANSLATE2)
         )
         if (NOT ABSEIL_DLL OR NOT PROTOBUF_DLL)
             message(FATAL_ERROR
-                "Не найдены abseil_dll.dll и/или libprotobuf.dll в vcpkg bin.")
+                "РќРµ РЅР°Р№РґРµРЅС‹ abseil_dll.dll Рё/РёР»Рё libprotobuf.dll РІ vcpkg bin.")
         endif()
         include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeployWin32Runtime.cmake")
     endif()
@@ -366,8 +397,8 @@ if (MSVC)
         target_compile_options(argos_smoke PRIVATE /EHsc /permissive- /utf-8)
         target_compile_options(marian_smoke PRIVATE /EHsc /permissive- /utf-8)
         target_compile_options(translator_cli PRIVATE /EHsc /permissive- /utf-8)
-        if (TARGET offline_translator_win32)
-            target_compile_options(offline_translator_win32 PRIVATE /EHsc /permissive- /utf-8)
+        if (TARGET TLing)
+            target_compile_options(TLing PRIVATE /EHsc /permissive- /utf-8)
         endif()
     endif()
 else()
@@ -411,7 +442,7 @@ if (ENABLE_CTRANSLATE2 AND WIN32)
         marian_smoke
         translator_cli
         firefox_smoke
-        offline_translator_win32
+        TLing
         core_tests
         integration_tests
     )
@@ -428,7 +459,7 @@ set_tests_properties(integration_tests PROPERTIES TIMEOUT 180)
 add_test(
     NAME portable_package_check
     COMMAND "${CMAKE_COMMAND}"
-        -DPACKAGE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/portable-win32-lite
+        -DPACKAGE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/portable-lite
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckPortablePackageOrSkip.cmake"
 )
 
@@ -478,15 +509,15 @@ if (ENABLE_CTRANSLATE2 AND WIN32 AND TARGET nllb_smoke)
         )
         set_tests_properties(firefox_cli_smoke PROPERTIES TIMEOUT 60)
     endif()
-    if (TARGET offline_translator_win32)
+    if (TARGET TLing)
         add_test(
             NAME win32_gui_smoke
-            COMMAND offline_translator_win32 --smoke-start
+            COMMAND TLing --smoke-start
         )
         set_tests_properties(win32_gui_smoke PROPERTIES TIMEOUT 15)
         add_test(
             NAME win32_popup_smoke
-            COMMAND offline_translator_win32 --smoke-popup
+            COMMAND TLing --smoke-popup
         )
         set_tests_properties(win32_popup_smoke PROPERTIES TIMEOUT 15)
     endif()

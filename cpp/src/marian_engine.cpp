@@ -1,4 +1,4 @@
-#include "offline_translator/marian_engine.hpp"
+﻿#include "offline_translator/marian_engine.hpp"
 
 #include "offline_translator/ctranslate2_engine.hpp"
 #include "offline_translator/marian_model_manager.hpp"

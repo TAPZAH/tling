@@ -1,4 +1,4 @@
-#include "offline_translator/autostart.hpp"
+﻿#include "offline_translator/autostart.hpp"
 
 #include <stdexcept>
 #include <string>

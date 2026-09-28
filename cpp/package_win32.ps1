@@ -1,7 +1,7 @@
 ﻿param(
     [string]$BuildDir = "$PSScriptRoot\build-ctranslate2",
     [string]$CTranslate2Dir = "C:\deps\CTranslate2\build-openblas-dnnl\Release",
-    [string]$OutputDir = "$PSScriptRoot\portable-win32-lite",
+    [string]$OutputDir = "$PSScriptRoot\portable-lite",
     [switch]$IncludeModels,
     [switch]$MigrateSettings,
     [switch]$CreateZip,
@@ -149,7 +149,7 @@ function Copy-LicenseFiles {
     $repoLicense = Join-Path $PSScriptRoot "..\LICENSE"
     if (Test-Path -LiteralPath $repoLicense -PathType Leaf) {
         Copy-Item -LiteralPath $repoLicense `
-            -Destination (Join-Path $TargetDirectory "LICENSE-offline-translator.txt") `
+            -Destination (Join-Path $TargetDirectory "LICENSE-tling.txt") `
             -Force
     }
 
@@ -248,9 +248,9 @@ function Write-DataPlaceholder {
 try {
     $vcpkgBin = Join-Path $BuildDir "vcpkg_installed\x64-windows\bin"
     $releaseDir = Join-Path $BuildDir "Release"
-    $exe = Join-Path $releaseDir "offline_translator_win32.exe"
+    $exe = Join-Path $releaseDir "TLing.exe"
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
-        throw "Build offline_translator_win32 Release first: $exe"
+        throw "Build TLing Release first: $exe"
     }
 
     if (Test-Path -LiteralPath $OutputDir) {

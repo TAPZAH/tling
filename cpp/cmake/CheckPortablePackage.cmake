@@ -1,16 +1,16 @@
-# Проверяет состав lite-портативной папки (без dumpbin).
-# cmake -DPACKAGE_DIR=<папка> -P cpp/cmake/CheckPortablePackage.cmake
+﻿# РџСЂРѕРІРµСЂСЏРµС‚ СЃРѕСЃС‚Р°РІ lite-РїРѕСЂС‚Р°С‚РёРІРЅРѕР№ РїР°РїРєРё (Р±РµР· dumpbin).
+# cmake -DPACKAGE_DIR=<РїР°РїРєР°> -P cpp/cmake/CheckPortablePackage.cmake
 
 if (NOT PACKAGE_DIR)
-    message(FATAL_ERROR "Задайте PACKAGE_DIR — каталог portable-сборки")
+    message(FATAL_ERROR "Р—Р°РґР°Р№С‚Рµ PACKAGE_DIR вЂ” РєР°С‚Р°Р»РѕРі portable-СЃР±РѕСЂРєРё")
 endif()
 
 if (NOT IS_DIRECTORY "${PACKAGE_DIR}")
-    message(FATAL_ERROR "Нет каталога поставки: ${PACKAGE_DIR}")
+    message(FATAL_ERROR "РќРµС‚ РєР°С‚Р°Р»РѕРіР° РїРѕСЃС‚Р°РІРєРё: ${PACKAGE_DIR}")
 endif()
 
 set(_required_files
-    offline_translator_win32.exe
+    TLing.exe
     ctranslate2.dll
     openblas.dll
     libprotobuf.dll
@@ -40,7 +40,7 @@ endif()
 
 if (_missing)
     message(FATAL_ERROR
-        "В поставке нет обязательных файлов: ${_missing} (каталог: ${PACKAGE_DIR})")
+        "Р’ РїРѕСЃС‚Р°РІРєРµ РЅРµС‚ РѕР±СЏР·Р°С‚РµР»СЊРЅС‹С… С„Р°Р№Р»РѕРІ: ${_missing} (РєР°С‚Р°Р»РѕРі: ${PACKAGE_DIR})")
 endif()
 
 foreach (_forbidden IN ITEMS
@@ -51,14 +51,14 @@ foreach (_forbidden IN ITEMS
 )
     if (EXISTS "${PACKAGE_DIR}/${_forbidden}")
         message(FATAL_ERROR
-            "В поставке не должно быть кэша сборки: ${PACKAGE_DIR}/${_forbidden}")
+            "Р’ РїРѕСЃС‚Р°РІРєРµ РЅРµ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ РєСЌС€Р° СЃР±РѕСЂРєРё: ${PACKAGE_DIR}/${_forbidden}")
     endif()
 endforeach()
 
 file(GLOB_RECURSE _pdbs "${PACKAGE_DIR}/*.pdb")
 if (_pdbs)
     message(FATAL_ERROR
-        "В поставке не должно быть .pdb (отладочные символы): ${_pdbs}")
+        "Р’ РїРѕСЃС‚Р°РІРєРµ РЅРµ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ .pdb (РѕС‚Р»Р°РґРѕС‡РЅС‹Рµ СЃРёРјРІРѕР»С‹): ${_pdbs}")
 endif()
 
-message(STATUS "Портативная папка выглядит целой: ${PACKAGE_DIR}")
+message(STATUS "РџРѕСЂС‚Р°С‚РёРІРЅР°СЏ РїР°РїРєР° РІС‹РіР»СЏРґРёС‚ С†РµР»РѕР№: ${PACKAGE_DIR}")

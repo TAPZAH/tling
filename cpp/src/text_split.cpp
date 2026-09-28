@@ -1,4 +1,4 @@
-#include "offline_translator/text_split.hpp"
+﻿#include "offline_translator/text_split.hpp"
 
 namespace offline_translator {
 namespace {

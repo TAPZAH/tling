@@ -1,4 +1,4 @@
-#include "offline_translator/sentencepiece_tokenizer.hpp"
+﻿#include "offline_translator/sentencepiece_tokenizer.hpp"
 
 #include <sentencepiece_processor.h>
 
