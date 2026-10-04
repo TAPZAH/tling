@@ -3420,18 +3420,46 @@ void open_releases_page() {
     ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
+void show_tray_balloon(
+    const std::wstring& title,
+    const std::wstring& text,
+    bool warning) {
+    if (!g_tray_added) {
+        return;
+    }
+    NOTIFYICONDATAW data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = g_tray_data.hWnd;
+    data.uID = g_tray_data.uID;
+    std::wstring body = text;
+    // szInfo ограничен 256 символами, длинный текст обрезаем.
+    if (body.size() > 200) {
+        body.resize(200);
+        body += L"...";
+    }
+    wcscpy_s(data.szInfoTitle, title.c_str());
+    wcscpy_s(data.szInfo, body.c_str());
+    data.uFlags = NIF_INFO;
+    data.dwInfoFlags = NIIF_INFO | (warning ? NIIF_WARNING : NIIF_NONE);
+    Shell_NotifyIconW(NIM_MODIFY, &data);
+}
+
 void start_update_check() {
     if (g_update_busy) {
         return;
     }
     HWND settings = g_runtime ? g_runtime->settings_window : nullptr;
-    if (!settings) {
+    HWND main_window = g_runtime ? g_runtime->main_window : nullptr;
+    if (!settings && !main_window) {
         return;
     }
+    // Результат ждут там, откуда нажали: в окне настроек, если оно
+    // открыто, иначе — во всплывающем сообщении у иконки в трее.
+    HWND target = settings ? settings : main_window;
     g_pending_update.reset();
     set_update_controls_busy(true);
     set_update_status(L"Проверяю GitHub...");
-    std::thread([settings]() {
+    std::thread([target]() {
         auto* payload = new UpdateCheckPayload{};
         try {
             const auto info = offline_translator::check_for_update(
@@ -3460,9 +3488,9 @@ void start_update_check() {
             payload->text =
                 L"Не удалось проверить обновления: " + from_utf8(error.what());
         }
-        if (!settings || !IsWindow(settings) ||
+        if (!target || !IsWindow(target) ||
             !PostMessageW(
-                settings,
+                target,
                 kUpdateCheckDoneMessage,
                 0,
                 reinterpret_cast<LPARAM>(payload))) {
@@ -5574,8 +5602,51 @@ LRESULT CALLBACK window_proc(
             }
             return 0;
         }
-        if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
-            open_settings_window(window, window_instance(window), true);
+if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
+                // Проверка идёт тихо: результат приходит во всплывающем
+                // сообщении, настройки открываются только если обновление
+                // найдено (чтобы предложить кнопку установки).
+                start_update_check();
+                return 0;
+            }
+        if (message == kUpdateCheckDoneMessage) {
+            // Проверка была запущена из трея: показываем результат
+            // всплывающим сообщением, а настройки открываем только когда
+            // обновление найдено — там живёт кнопка установки.
+            std::unique_ptr<UpdateCheckPayload> payload(
+                reinterpret_cast<UpdateCheckPayload*>(l_param));
+            g_pending_update = payload->info;
+            set_update_controls_busy(false);
+            if (payload->failed) {
+                show_tray_balloon(
+                    offline_translator::tr(L"Ошибка"), payload->text, true);
+            } else if (payload->info) {
+                show_tray_balloon(
+                    offline_translator::tr(L"Доступно обновление"),
+                    payload->text,
+                    false);
+                try {
+                    open_settings_window(window, window_instance(window));
+                    if (g_runtime && g_runtime->settings_window) {
+                        settings_show_page(
+                            g_runtime->settings_window,
+                            kSettingsPageAbout);
+                        // Окно только что создано: обновляем состояние
+                        // кнопок, иначе «Скачать и установить» останется
+                        // неактивной до повторной проверки.
+                        set_update_controls_busy(false);
+                    }
+                } catch (const std::exception& error) {
+                    offline_translator::app_log_error(
+                        std::string("не удалось открыть настройки: ") +
+                        error.what());
+                }
+            } else {
+                show_tray_balloon(
+                    offline_translator::tr(L"Обновлений нет"),
+                    payload->text,
+                    false);
+            }
             return 0;
         }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayTurbo) {

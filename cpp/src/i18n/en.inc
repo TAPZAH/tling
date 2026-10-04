@@ -1,5 +1,5 @@
 // Английский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 133> kStringsEn{{
+constexpr std::array<Pair, 135> kStringsEn{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Automatically copy the selected text to the clipboard"},
     {L"Автор: ", L"Author: "},
     {L"Версия: ", L"Version: "},
@@ -131,5 +131,7 @@ constexpr std::array<Pair, 133> kStringsEn{{
     {L"Автокопирование выключено", L"Auto-copy disabled"},
     {L"Турбо перевод: сразу переводить выделенный текст", L"Turbo translation: translate selected text immediately"},
     {L"Турбо перевод включён", L"Turbo translation enabled"},
-    {L"Турбо перевод выключен", L"Turbo translation disabled"}
+    {L"Турбо перевод выключен", L"Turbo translation disabled"},
+    {L"Доступно обновление", L"Update available"},
+    {L"Обновлений нет", L"No updates found"}
 }};

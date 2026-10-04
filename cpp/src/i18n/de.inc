@@ -1,5 +1,5 @@
 // Немецкий словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 133> kStringsDe{{
+constexpr std::array<Pair, 135> kStringsDe{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Ausgew\u00e4hlten Text automatisch in die Zwischenablage kopieren"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Version: "},
@@ -131,5 +131,7 @@ constexpr std::array<Pair, 133> kStringsDe{{
     {L"Автокопирование выключено", L"Auto-Kopieren deaktiviert"},
     {L"Турбо перевод: сразу переводить выделенный текст", L"Turbo-\u00dcbersetzung: ausgew\u00e4hlten Text sofort \u00fcbersetzen"},
     {L"Турбо перевод включён", L"Turbo-\u00dcbersetzung aktiviert"},
-    {L"Турбо перевод выключен", L"Turbo-\u00dcbersetzung deaktiviert"}
+    {L"Турбо перевод выключен", L"Turbo-\u00dcbersetzung deaktiviert"},
+    {L"Доступно обновление", L"Update verf\u00fcgbar"},
+    {L"Обновлений нет", L"Keine Updates verf\u00fcgbar"}
 }};
