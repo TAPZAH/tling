@@ -1,4 +1,4 @@
-﻿; Установщик TLing (C++ Win32).
+; Установщик TLing (C++ Win32).
 ; По умолчанию — БЕЗ языковых моделей (папка portable-lite):
 ;   powershell -File cpp\package_win32.ps1 -OutputDir cpp\portable-lite
 ;   ISCC.exe cpp\TLing.iss
@@ -11,7 +11,7 @@
 ; %USERPROFILE%\.local\share\offline-translator не трогается.
 
 #define AppName "TLing"
-#define AppVersion "0.99.2-beta"
+#define AppVersion "0.99.3-beta"
 #define AppPublisher "TAP3AH"
 #define AppExeName "TLing.exe"
 
@@ -56,11 +56,11 @@ RestartApplications=no
 ; Язык установщика определяется по языку системы; ShowLanguageDialog=yes
 ; всегда показывает выбор языка (с уже выбранным системным).
 ShowLanguageDialog=yes
-VersionInfoVersion=0.99.2.0
+VersionInfoVersion=0.99.3.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName}
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion=0.99.2.0
+VersionInfoProductVersion=0.99.3.0
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
