@@ -1,0 +1,5 @@
+# GitHub учитывает со-авторов коммитов ( trailers Co-authored-by), поэтому
+# без этого файла в списке Contributors проекта появляется cursoragent.
+# Правила отображают прежних авторов под именем владельца репозитория.
+Cursor <cursoragent@cursor.com> TAPZAH <84733146+TAPZAH@users.noreply.github.com>
+test <yado@mail.com> TAPZAH <84733146+TAPZAH@users.noreply.github.com>

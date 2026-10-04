@@ -116,6 +116,7 @@ constexpr int kTrayAutostart = 3002;
 constexpr int kTrayExit = 3003;
 constexpr int kTrayCheckUpdate = 3004;
 constexpr int kTrayAutoCopy = 3005;
+constexpr int kTrayTurbo = 3006;
 constexpr int kTrayHistoryRoot = 3097;
 constexpr int kTrayHistoryEmpty = 3098;
 constexpr int kTrayHistoryClear = 3099;
@@ -222,6 +223,9 @@ struct UpdateInstallPayload {
 
 void sel_log(const std::string& line);
 std::string runtime_flags();
+void store_runtime_settings(const offline_translator::AppSettings& settings);
+template <typename Fn>
+void update_runtime_settings(Fn&& mutate);
 
 struct PackageRow {
     bool nllb{false};
@@ -237,6 +241,7 @@ struct PackageRow {
 
 struct GuiRuntime {
     std::mutex mutex;
+    std::mutex settings_mutex;
     offline_translator::TranslationSession session;
     offline_translator::AppSettings settings;
     std::atomic<bool> busy{false};
@@ -906,9 +911,7 @@ void persist_settings(HWND window) {
     try {
         auto settings = current_settings(window);
         offline_translator::save_settings(settings);
-        if (g_runtime) {
-            g_runtime->settings = settings;
-        }
+        store_runtime_settings(settings);
     } catch (const std::exception&) {
         // Сохранение не должно ронять интерфейс.
     }
@@ -2035,6 +2038,8 @@ const wchar_t* tray_menu_label(UINT id) {
             return L"Запускать вместе с Windows";
         case kTrayAutoCopy:
             return L"Автоматически копировать выделенный текст в буфер обмена";
+        case kTrayTurbo:
+            return L"Турбо перевод: сразу переводить выделенный текст";
         case kTrayCheckUpdate:
             return L"Проверить обновления";
         case kTrayExit:
@@ -2167,6 +2172,22 @@ void show_tray_menu(HWND window) {
         autocopy_flags,
         kTrayAutoCopy,
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayAutoCopy)));
+    UINT turbo_flags = MF_OWNERDRAW;
+    {
+        bool turbo = false;
+        try {
+            turbo = g_runtime && g_runtime->settings.turbo_translation;
+        } catch (const std::exception&) {
+        }
+        if (turbo) {
+            turbo_flags |= MF_CHECKED;
+        }
+    }
+    AppendMenuW(
+        menu,
+        turbo_flags,
+        kTrayTurbo,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayTurbo)));
     AppendMenuW(
         menu,
         autostart_flags,
@@ -2234,14 +2255,41 @@ void sel_log(const std::string& line) {
     offline_translator::app_log_info(line);
 }
 
+// Сторож и рабочие потоки читают строки настроек из своих потоков, пока
+// GUI-поток их меняет. runtime->mutex держится всё время перевода, поэтому
+// для настроек нужен отдельный короткий мьютекс.
+void store_runtime_settings(const offline_translator::AppSettings& settings) {
+    if (!g_runtime) {
+        return;
+    }
+    std::lock_guard lock(g_runtime->settings_mutex);
+    g_runtime->settings = settings;
+}
+
+template <typename Fn>
+void update_runtime_settings(Fn&& mutate) {
+    if (!g_runtime) {
+        return;
+    }
+    std::lock_guard lock(g_runtime->settings_mutex);
+    mutate(g_runtime->settings);
+}
+
 std::string runtime_flags() {
     if (!g_runtime) {
         return "runtime=0";
     }
+    std::string engine;
+    std::string theme;
+    {
+        std::lock_guard lock(g_runtime->settings_mutex);
+        engine = g_runtime->settings.engine;
+        theme = g_runtime->settings.ui_theme;
+    }
     return "busy=" + std::to_string(g_runtime->busy.load()) +
         " sel_busy=" + std::to_string(g_runtime->selection_busy.load()) +
-        " engine=" + g_runtime->settings.engine +
-        " theme=" + g_runtime->settings.ui_theme;
+        " engine=" + engine +
+        " theme=" + theme;
 }
 
 void restart_selection_timer(HWND window) {
@@ -2868,7 +2916,7 @@ void capture_and_show_button(HWND main_window, int cursor_x, int cursor_y) {
 
 // Копирует выделение в буфер без показа кнопки перевода
 // (режим «Только Ctrl+C+C» или не сработавший модификатор).
-void capture_selection_only(HWND main_window) {
+void capture_selection_only(HWND main_window, bool translate_now = false) {
     static std::atomic<bool> capturing{false};
     if (capturing.exchange(true)) {
         return;
@@ -2891,6 +2939,11 @@ void capture_selection_only(HWND main_window) {
         try {
             offline_translator::add_clipboard_history_item(to_utf8(selected));
         } catch (const std::exception&) {
+        }
+        if (translate_now) {
+            // Турбо-перевод: текст уже выделен, кнопка у курсора не нужна.
+            hide_selection_button();
+            start_selection_translation(main_window);
         }
     } catch (const std::exception& error) {
         sel_log(std::string("copy-only error: ") + error.what());
@@ -3067,7 +3120,12 @@ void poll_selection(HWND main_window) {
         // второй захват поверх первого.
         const bool recent_capture =
             (now - g_selection.last_capture_time) < 0.35;
-        if (!recent_capture && gesture_ok &&
+        if (!recent_capture && gesture_ok && g_runtime->settings.turbo_translation) {
+            // Турбо-перевод: выделили текст — сразу переводим, без кнопки
+            // у курсора и без двойного Ctrl+C.
+            g_selection.last_capture_time = now;
+            capture_selection_only(main_window, true);
+        } else if (!recent_capture && gesture_ok &&
             g_runtime->settings.selection_popup_enabled && modifier_ok) {
             g_selection.last_capture_time = now;
             capture_and_show_button(main_window, cursor.x, cursor.y);
@@ -3460,7 +3518,7 @@ void start_update_install() {
     }).detach();
 }
 
-LRESULT CALLBACK selection_button_proc(
+LRESULT CALLBACK selection_button_proc_impl(
     HWND window,
     UINT message,
     WPARAM w_param,
@@ -3491,7 +3549,23 @@ LRESULT CALLBACK selection_button_proc(
     return DefWindowProcW(window, message, w_param, l_param);
 }
 
-LRESULT CALLBACK result_popup_proc(
+// Исключение из оконной процедуры приводит к std::terminate, поэтому
+// каждая процедура оборачивается в try/catch (как window_proc).
+LRESULT CALLBACK selection_button_proc(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    try {
+        return selection_button_proc_impl(window, message, w_param, l_param);
+    } catch (const std::exception& error) {
+        offline_translator::app_log_error(
+            std::string("ошибка кнопки выделения: ") + error.what());
+        return 0;
+    }
+}
+
+LRESULT CALLBACK result_popup_proc_impl(
     HWND window,
     UINT message,
     WPARAM w_param,
@@ -3653,6 +3727,22 @@ LRESULT CALLBACK result_popup_proc(
     return DefWindowProcW(window, message, w_param, l_param);
 }
 
+LRESULT CALLBACK result_popup_proc(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    try {
+        return result_popup_proc_impl(window, message, w_param, l_param);
+    } catch (const std::exception& error) {
+        offline_translator::app_log_error(
+            std::string("ошибка окна перевода: ") + error.what());
+        // Окно не уничтожаем: DestroyWindow из его же процедуры — известный
+        // источник краша. Пользователь закроет его обычным щелчком.
+        return 0;
+    }
+}
+
 void apply_settings_dialog(HWND settings_window) {
     if (!g_runtime) {
         return;
@@ -3706,11 +3796,17 @@ void apply_settings_dialog(HWND settings_window) {
     if (g_runtime->main_window && g_engine_combo) {
         settings.engine =
             offline_translator::settings_engine_name(selected_engine());
-        settings.source_language = selected_language(g_source_language_combo);
-        settings.target_language = selected_language(g_target_language_combo);
-        collect_window_size(g_runtime->main_window, settings);
     }
     try {
+        // selected_language() бросает исключение, если в комбобоксе нет
+        // выбранного пункта, поэтому читать языки нужно внутри try.
+        if (g_runtime->main_window && g_engine_combo) {
+            settings.source_language =
+                selected_language(g_source_language_combo);
+            settings.target_language =
+                selected_language(g_target_language_combo);
+            collect_window_size(g_runtime->main_window, settings);
+        }
         if (!g_smoke_mode) {
             offline_translator::save_settings(settings);
             const bool autostart =
@@ -3728,7 +3824,7 @@ void apply_settings_dialog(HWND settings_window) {
                     MB_ICONWARNING | MB_OK);
             }
         }
-        g_runtime->settings = settings;
+        store_runtime_settings(settings);
         refresh_tray_icon();
         apply_live_theme();
         offline_translator::app_log_info(
@@ -3786,7 +3882,7 @@ void close_settings_window() {
 
 // Панель содержимого окна настроек: прокачивает цвета темы и
 // пересылает команды в само окно настроек.
-LRESULT CALLBACK settings_panel_proc(
+LRESULT CALLBACK settings_panel_proc_impl(
     HWND window,
     UINT message,
     WPARAM w_param,
@@ -3817,7 +3913,21 @@ LRESULT CALLBACK settings_panel_proc(
     return DefWindowProcW(window, message, w_param, l_param);
 }
 
-LRESULT CALLBACK settings_proc(
+LRESULT CALLBACK settings_panel_proc(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    try {
+        return settings_panel_proc_impl(window, message, w_param, l_param);
+    } catch (const std::exception& error) {
+        offline_translator::app_log_error(
+            std::string("ошибка панели настроек: ") + error.what());
+        return 0;
+    }
+}
+
+LRESULT CALLBACK settings_proc_impl(
     HWND window,
     UINT message,
     WPARAM w_param,
@@ -4558,7 +4668,11 @@ LRESULT CALLBACK settings_proc(
             const wchar_t* names[4] = {
                 L"argos", L"nllb", L"firefox", L"marian"};
             if (engine >= 0 && engine < 4 && g_runtime) {
-                g_runtime->settings.engine = to_utf8(names[engine]);
+                const std::string engine_name = to_utf8(names[engine]);
+                update_runtime_settings(
+                    [&engine_name](offline_translator::AppSettings& current) {
+                        current.engine = engine_name;
+                    });
                 try {
                     if (!g_smoke_mode) {
                         offline_translator::save_settings(g_runtime->settings);
@@ -4581,7 +4695,10 @@ LRESULT CALLBACK settings_proc(
                 static_cast<std::size_t>(selected - 1) < options.size()) {
                 code = options[static_cast<std::size_t>(selected - 1)].code;
             }
-            g_runtime->settings.ui_language = code;
+            update_runtime_settings(
+                    [&code](offline_translator::AppSettings& current) {
+                        current.ui_language = code;
+                    });
             offline_translator::set_ui_language(code);
             try {
                 if (!g_smoke_mode) {
@@ -4678,6 +4795,25 @@ LRESULT CALLBACK settings_proc(
         return 0;
     }
     return DefWindowProcW(window, message, w_param, l_param);
+}
+
+LRESULT CALLBACK settings_proc(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    try {
+        return settings_proc_impl(window, message, w_param, l_param);
+    } catch (const std::exception& error) {
+        offline_translator::app_log_error(
+            std::string("ошибка окна настроек: ") + error.what());
+        localized_message_box(
+            window,
+            from_utf8(error.what()).c_str(),
+            L"Ошибка",
+            MB_ICONERROR | MB_OK);
+        return 0;
+    }
 }
 
 void open_settings_window(HWND parent, HINSTANCE instance, bool check_updates) {
@@ -4898,9 +5034,7 @@ void create_main_controls(HWND window) {
         nullptr,
         nullptr);
     const auto settings = offline_translator::load_settings();
-    if (g_runtime) {
-        g_runtime->settings = settings;
-    }
+    store_runtime_settings(settings);
     apply_settings_to_ui(settings);
     layout_main(window);
     if (g_packages_button) {
@@ -5160,7 +5294,10 @@ LRESULT CALLBACK packages_proc(
                 notification == CBN_SELCHANGE && g_runtime) {
                 const LRESULT arch =
                     SendMessageW(g_package_arch_combo, CB_GETCURSEL, 0, 0);
-                g_runtime->settings.architecture = arch == 1 ? "base" : "tiny";
+                update_runtime_settings(
+                    [arch](offline_translator::AppSettings& current) {
+                        current.architecture = arch == 1 ? "base" : "tiny";
+                    });
                 try {
                     if (!g_smoke_mode) {
                         offline_translator::save_settings(g_runtime->settings);
@@ -5407,8 +5544,12 @@ LRESULT CALLBACK window_proc(
         }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayAutoCopy) {
             if (g_runtime) {
-                const bool enabled = !g_runtime->settings.auto_copy_selection;
-                g_runtime->settings.auto_copy_selection = enabled;
+                bool enabled = false;
+                update_runtime_settings(
+                    [&enabled](offline_translator::AppSettings& current) {
+                        enabled = !current.auto_copy_selection;
+                        current.auto_copy_selection = enabled;
+                    });
                 try {
                     if (!g_smoke_mode) {
                         offline_translator::save_settings(g_runtime->settings);
@@ -5435,6 +5576,30 @@ LRESULT CALLBACK window_proc(
         }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             open_settings_window(window, window_instance(window), true);
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayTurbo) {
+            if (g_runtime) {
+                bool enabled = false;
+                update_runtime_settings(
+                    [&enabled](offline_translator::AppSettings& current) {
+                        enabled = !current.turbo_translation;
+                        current.turbo_translation = enabled;
+                    });
+                try {
+                    if (!g_smoke_mode) {
+                        offline_translator::save_settings(g_runtime->settings);
+                    }
+                } catch (const std::exception&) {
+                }
+                set_status(
+                    offline_translator::tr(
+                        enabled ? L"Турбо перевод включён"
+                                : L"Турбо перевод выключен"));
+                offline_translator::app_log_info(
+                    std::string("трей: турбо перевод ") +
+                    (enabled ? "включён" : "выключен"));
+            }
             return 0;
         }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayHistoryClear) {
@@ -5987,7 +6152,7 @@ int WINAPI wWinMain(
         return 1;
     }
     g_runtime->main_window = window;
-    g_runtime->settings = settings;
+    store_runtime_settings(settings);
     if (!g_smoke_mode &&
         !register_translate_hotkey(window, settings.translate_hotkey)) {
         offline_translator::app_log_error(

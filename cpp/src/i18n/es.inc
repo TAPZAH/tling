@@ -1,5 +1,5 @@
-﻿// Испанский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 130> kStringsEs{{
+// Испанский словарь интерфейса (ключи — русские строки).
+constexpr std::array<Pair, 133> kStringsEs{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copiar autom\u00e1ticamente el texto seleccionado al portapapeles"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Versi\u00f3n: "},
@@ -129,4 +129,7 @@ constexpr std::array<Pair, 130> kStringsEs{{
     {L"Язык определяется по языку системы. Изменение применяется сразу.", L"El idioma se detecta del sistema. Los cambios se aplican de inmediato."},
     {L"Автокопирование включено", L"Copiado autom\u00e1tico activado"},
     {L"Автокопирование выключено", L"Copiado autom\u00e1tico desactivado"},
+    {L"Турбо перевод: сразу переводить выделенный текст", L"Traducci\u00f3n turbo: traducir inmediatamente el texto seleccionado"},
+    {L"Турбо перевод включён", L"Traducci\u00f3n turbo activada"},
+    {L"Турбо перевод выключен", L"Traducci\u00f3n turbo desactivada"}
 }};

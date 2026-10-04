@@ -1,5 +1,5 @@
-﻿// Французский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 130> kStringsFr{{
+// Французский словарь интерфейса (ключи — русские строки).
+constexpr std::array<Pair, 133> kStringsFr{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copier automatiquement le texte s\u00e9lectionn\u00e9 dans le presse-papiers"},
     {L"Автор: ", L"Auteur : "},
     {L"Версия: ", L"Version : "},
@@ -129,4 +129,7 @@ constexpr std::array<Pair, 130> kStringsFr{{
     {L"Язык определяется по языку системы. Изменение применяется сразу.", L"La langue est d\u00e9tect\u00e9e d'apr\u00e8s le syst\u00e8me. Les changements s'appliquent imm\u00e9diatement."},
     {L"Автокопирование включено", L"Copie automatique activ\u00e9e"},
     {L"Автокопирование выключено", L"Copie automatique d\u00e9sactiv\u00e9e"},
+    {L"Турбо перевод: сразу переводить выделенный текст", L"Traduction turbo : traduire imm\u00e9diatement le texte s\u00e9lectionn\u00e9"},
+    {L"Турбо перевод включён", L"Traduction turbo activ\u00e9e"},
+    {L"Турбо перевод выключен", L"Traduction turbo d\u00e9sactiv\u00e9e"}
 }};

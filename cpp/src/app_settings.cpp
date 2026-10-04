@@ -226,6 +226,8 @@ AppSettings load_settings(const std::filesystem::path& path) {
         settings.ui_theme = read_ui_theme(data);
         settings.auto_copy_selection =
             read_bool(data, "auto_copy_selection", false);
+        settings.turbo_translation =
+            read_bool(data, "turbo_translation", false);
         settings.clipboard_history_limit = normalize_clipboard_history_limit(
             read_int(
                 data,
@@ -273,6 +275,7 @@ void save_settings(
     data["ui_language"] = settings.ui_language;
     data["ui_theme"] = normalize_ui_theme(settings.ui_theme);
     data["auto_copy_selection"] = settings.auto_copy_selection;
+    data["turbo_translation"] = settings.turbo_translation;
     data["clipboard_history_limit"] =
         normalize_clipboard_history_limit(settings.clipboard_history_limit);
     fs_utils::write_text_file(path, data.dump(2) + "\n");

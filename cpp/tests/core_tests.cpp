@@ -739,6 +739,15 @@ int main() {
             require(
                 std::string(decompressed.begin(), decompressed.end()) == payload,
                 "содержимое после zunstd совпадает");
+            // Регрессия: поток, оборванный посередине кадра, раньше
+            // считался успешно распакованным, и битый model.bin
+            // устанавливался как модель.
+            if (compressed > 4) {
+                require(
+                    !compression::zunstd(
+                        zstd_payload.data(), compressed - 3, decompressed),
+                    "zunstd отвергает обрезанный кадр");
+            }
         }
         require(!compression::gunzip(nullptr, 0, decompressed), "gunzip: пустой вход");
         require(!compression::zunstd(nullptr, 0, decompressed), "zunstd: пустой вход");
@@ -862,6 +871,77 @@ int main() {
     }
 
     {
+        // Регрессия: битый CRC и завышенное смещение локального заголовка
+        // раньше проходили как «успешная» распаковка (uint32 переполнялся,
+        // CRC не проверялся) — extract_zip обязан бросать исключение.
+        const auto guard_root =
+            std::filesystem::temp_directory_path() /
+            "offline-translator-deflate-guard";
+        std::filesystem::remove_all(guard_root);
+        std::filesystem::create_directories(guard_root);
+        const auto good_zip = guard_root / "good.zip";
+        const auto payload_file = guard_root / "payload.txt";
+        fs_utils::write_text_file(payload_file, "hello guard");
+        write_store_zip(good_zip, {{"payload.txt", payload_file}});
+        extract_zip(good_zip, guard_root / "out-good");
+        require(
+            fs_utils::file_size_or_zero(guard_root / "out-good" / "payload.txt") ==
+                11,
+            "эталонный ZIP распаковывается");
+        auto bytes = std::vector<unsigned char>{};
+        {
+            std::ifstream in(good_zip, std::ios::binary);
+            bytes.assign(
+                std::istreambuf_iterator<char>(in),
+                std::istreambuf_iterator<char>());
+        }
+        require(!bytes.empty(), "фикстура ZIP прочитана");
+        std::size_t central_offset = 0;
+        for (std::size_t i = 0; i + 4 <= bytes.size(); ++i) {
+            if (bytes[i] == 0x50 && bytes[i + 1] == 0x4b &&
+                bytes[i + 2] == 0x01 && bytes[i + 3] == 0x02) {
+                central_offset = i;
+                break;
+            }
+        }
+        require(central_offset > 0, "центральный каталог найден в фикстуре");
+        bool threw = false;
+        try {
+            auto broken = bytes;
+            // CRC32 в записи центрального каталога (+16).
+            broken[central_offset + 16] =
+                static_cast<unsigned char>(broken[central_offset + 16] ^ 0xFFu);
+            const auto broken_path = guard_root / "bad-crc.zip";
+            fs_utils::write_bytes(broken_path, broken.data(), broken.size());
+            extract_zip(broken_path, guard_root / "out-crc");
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        require(threw, "битый CRC в ZIP отвергается");
+        threw = false;
+        try {
+            auto broken = bytes;
+            // Смещение локального заголовка (+42) = 0xFFFFFFF0: раньше
+            // сумма переполнялась по модулю 2^32 и проверка проходила.
+            for (std::size_t i = 0; i < 4; ++i) {
+                broken[central_offset + 42 + i] = 0xFFu;
+            }
+            broken[central_offset + 42] = 0xF0u;
+            const auto broken_path = guard_root / "bad-offset.zip";
+            fs_utils::write_bytes(broken_path, broken.data(), broken.size());
+            extract_zip(broken_path, guard_root / "out-offset");
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        require(threw, "переполненное смещение в ZIP отвергается");
+        require(
+            !std::filesystem::exists(
+                guard_root / "out-offset" / "payload.txt"),
+            "повреждённая запись не распаковывается на диск");
+        std::filesystem::remove_all(guard_root);
+    }
+
+    {
         // Реальные пакеты *.argosmodel (DEFLATE от Python-ziplib). Проверка
         // включается переменной окружения TLING_TEST_ARGOS_MODEL со списком
         // путей через ';', чтобы ctest не зависел от больших файлов и сети.
@@ -914,6 +994,7 @@ int main() {
         require(missing.target_language == "ru", "язык перевода по умолчанию");
         require(missing.ui_theme == "light", "тема по умолчанию light");
         require(!missing.auto_copy_selection, "автокопирование по умолчанию выкл");
+        require(!missing.turbo_translation, "турбо перевод по умолчанию выкл");
         require(
             missing.clipboard_history_limit == 10,
             "история по умолчанию 10");
@@ -1009,6 +1090,16 @@ int main() {
         require(
             copy_roundtrip.auto_copy_selection,
             "auto_copy_selection сохраняется");
+        loaded.turbo_translation = true;
+        save_settings(path, loaded);
+        require(
+            load_settings(path).turbo_translation,
+            "turbo_translation сохраняется");
+        loaded.turbo_translation = false;
+        save_settings(path, loaded);
+        require(
+            !load_settings(path).turbo_translation,
+            "turbo_translation выключается обратно");
         require(
             copy_roundtrip.clipboard_history_limit == 7,
             "clipboard_history_limit сохраняется");
@@ -1017,6 +1108,24 @@ int main() {
         require(
             load_settings(path).clipboard_history_limit == 50,
             "clipboard_history_limit ограничивается 50");
+        {
+            // Регрессия: битая горячая клавиша в settings.json больше не
+            // сбрасывает все настройки (раньше stoi бросал исключение
+            // наружу, и load_settings возвращал настройки по умолчанию).
+            const auto broken_path = settings_dir / "broken-hotkey.json";
+            fs_utils::write_text_file(
+                broken_path,
+                "{\"translate_hotkey\":\"F999999999\",\"ui_theme\":\"dark\","
+                "\"engine\":\"firefox\"}");
+            const auto broken_hotkey = load_settings(broken_path);
+            require(
+                broken_hotkey.ui_theme == "dark",
+                "битый хоткей не сбрасывает тему");
+            require(
+                broken_hotkey.engine == "firefox",
+                "битый хоткей не сбрасывает движок");
+            std::filesystem::remove(broken_path);
+        }
         {
             std::ifstream in(path);
             raw.assign(
@@ -1116,6 +1225,18 @@ int main() {
         require(f9.has_value() && f9->alt && f9->vk == 0x78u, "Alt+F9");
         require(!parse_hotkey("Ctrl+").has_value(), "неполная комбинация");
         require(!parse_hotkey("").has_value(), "пустая комбинация");
+        // Регрессия: std::stoi бросал std::out_of_range на «F999999999»,
+        // а значение приходит из settings.json и сбрасывало все настройки.
+        require(
+            !parse_hotkey("F999999999").has_value(),
+            "слишком длинный номер F-клавиши отвергается");
+        require(
+            !parse_hotkey("F0").has_value(),
+            "F0 не является клавишей");
+        const auto f24 = parse_hotkey("Ctrl+F24");
+        require(
+            f24.has_value() && f24->vk == 0x87u,
+            "верхняя граница F24 разбирается");
     }
 
     {

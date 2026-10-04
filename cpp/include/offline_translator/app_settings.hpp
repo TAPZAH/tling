@@ -35,6 +35,8 @@ struct AppSettings {
     // light | dark — оформление окна перевода, меню и иконок.
     std::string ui_theme{"light"};
     bool auto_copy_selection{false};
+    // Турбо-перевод: переводить выделенный текст сразу, без кнопки у курсора.
+    bool turbo_translation{false};
     int clipboard_history_limit{10};
 };
 

@@ -1,5 +1,5 @@
-﻿// Английский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 130> kStringsEn{{
+// Английский словарь интерфейса (ключи — русские строки).
+constexpr std::array<Pair, 133> kStringsEn{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Automatically copy the selected text to the clipboard"},
     {L"Автор: ", L"Author: "},
     {L"Версия: ", L"Version: "},
@@ -129,4 +129,7 @@ constexpr std::array<Pair, 130> kStringsEn{{
     {L"Язык определяется по языку системы. Изменение применяется сразу.", L"The language is detected from the system. Changes apply immediately."},
     {L"Автокопирование включено", L"Auto-copy enabled"},
     {L"Автокопирование выключено", L"Auto-copy disabled"},
+    {L"Турбо перевод: сразу переводить выделенный текст", L"Turbo translation: translate selected text immediately"},
+    {L"Турбо перевод включён", L"Turbo translation enabled"},
+    {L"Турбо перевод выключен", L"Turbo translation disabled"}
 }};
