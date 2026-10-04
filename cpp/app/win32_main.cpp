@@ -1,4 +1,4 @@
-﻿#include "offline_translator/app_log.hpp"
+#include "offline_translator/app_log.hpp"
 #include "offline_translator/app_language.hpp"
 #include "offline_translator/app_settings.hpp"
 #include "offline_translator/app_update.hpp"
@@ -5979,6 +5979,12 @@ int run_smoke_loop(HWND window) {
 // в обоих режимах. Не трогает автозагрузку и треи.
 int run_popup_smoke_loop(HWND window) {
     MSG message{};
+    // Причина падения записывается в лог: иначе «exit 1» ничего не объясняет.
+    auto fail = [](const char* reason) {
+        offline_translator::app_log_error(
+            std::string("popup smoke: ") + reason);
+        return 1;
+    };
     auto pump = [&message](int iterations) {
         for (int step = 0; step < iterations; ++step) {
             while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
@@ -5995,36 +6001,43 @@ int run_popup_smoke_loop(HWND window) {
 
     show_selection_button(120, 120, window);
     if (!IsWindow(g_selection_button)) {
-        return 1;
+        return fail("кнопка у курсора не создана");
     }
     if (!pump(10)) {
         return static_cast<int>(message.wParam);
     }
-    // Кнопка обязана быть видимой на экране: в квадрате 40×40 должно
-    // найтись несколько разных пикселей (иконка), а не сплошной фон.
+    // Иконка проверяется в самом процессе, а не по пикселям экрана: иначе
+    // тест ломается, если в этой точке лежит чужое окно (браузер, терминал).
+    if (!g_button_uses_icon) {
+        return fail("иконка не применилась, сработал запасной вариант Aa");
+    }
     {
-        RECT button_rect{};
-        GetWindowRect(g_selection_button, &button_rect);
+        HBITMAP composed = nullptr;
+        if (!compose_selection_icon_bitmap(&composed) || !composed) {
+            return fail("иконка кнопки не собирается");
+        }
         HDC screen = GetDC(nullptr);
-        COLORREF reference = GetPixel(
-            screen,
-            (button_rect.left + button_rect.right) / 2 - 18,
-            (button_rect.top + button_rect.bottom) / 2 - 18);
+        HDC memory = CreateCompatibleDC(screen);
+        const HGDIOBJ previous = SelectObject(memory, composed);
+        BITMAP info{};
+        GetObjectW(composed, sizeof(info), &info);
+        const COLORREF reference =
+            GetPixel(memory, info.bmWidth / 2, info.bmHeight / 2);
         int distinct = 0;
-        for (int step_y = 4; step_y < 40; step_y += 8) {
-            for (int step_x = 4; step_x < 40; step_x += 8) {
-                const COLORREF pixel = GetPixel(
-                    screen,
-                    button_rect.left + step_x,
-                    button_rect.top + step_y);
-                if (pixel != reference) {
+        for (int step_y = 4; step_y < info.bmHeight && distinct < 3;
+             step_y += 8) {
+            for (int step_x = 4; step_x < info.bmWidth; step_x += 8) {
+                if (GetPixel(memory, step_x, step_y) != reference) {
                     ++distinct;
                 }
             }
         }
+        SelectObject(memory, previous);
+        DeleteDC(memory);
         ReleaseDC(nullptr, screen);
+        DeleteObject(composed);
         if (distinct < 3) {
-            return 1;
+            return fail("иконка кнопки пустая");
         }
     }
     hide_selection_button();
@@ -6034,14 +6047,14 @@ int run_popup_smoke_loop(HWND window) {
     show_result_popup(window, L"Проверка перевода", "ru", "en");
     if (!IsWindow(g_result_popup) || !g_popup_result_edit ||
         !g_popup_copy_button) {
-        return 1;
+        return fail("попап перевода не создан");
     }
     RECT popup_bounds{};
     GetWindowRect(g_result_popup, &popup_bounds);
     // Высота должна подстраиваться под короткий текст (2 строки минимум).
     const int selectable_height = popup_bounds.bottom - popup_bounds.top;
     if (selectable_height <= 60 || selectable_height > 400) {
-        return 1;
+        return fail("неверная высота попапа");
     }
     if (!pump(10)) {
         return static_cast<int>(message.wParam);
@@ -6052,12 +6065,12 @@ int run_popup_smoke_loop(HWND window) {
         offline_translator::kResultWindowClickToClose;
     show_result_popup(window, L"Второй режим", "en", "ru");
     if (!IsWindow(g_result_popup) || !g_popup_copy_button) {
-        return 1;
+        return fail("попап в режиме click_to_close не создан");
     }
     pump(10);
     hide_result_popup();
     if (IsWindow(g_result_popup) || IsWindow(g_selection_button)) {
-        return 1;
+        return fail("попап или кнопка не закрылись");
     }
     DestroyWindow(window);
     return 0;
