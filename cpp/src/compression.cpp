@@ -73,9 +73,15 @@ bool zunstd(
         out.clear();
         std::vector<std::uint8_t> buffer(ZSTD_DStreamOutSize());
         ZSTD_inBuffer input{data, size, 0};
-        while (input.pos < input.size) {
+        std::size_t status = 1;
+        while (status != 0 || input.pos < input.size) {
+            if (status != 0 && input.pos == input.size) {
+                // Данные закончились, а кадр не закрыт: поток оборван.
+                ZSTD_freeDStream(stream);
+                return false;
+            }
             ZSTD_outBuffer output{buffer.data(), buffer.size(), 0};
-            const std::size_t status = ZSTD_decompressStream(stream, &output, &input);
+            status = ZSTD_decompressStream(stream, &output, &input);
             if (ZSTD_isError(status)) {
                 ZSTD_freeDStream(stream);
                 return false;

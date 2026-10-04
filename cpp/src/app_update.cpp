@@ -210,6 +210,14 @@ std::optional<UpdateInfo> check_for_update(
     const std::filesystem::path& app_dir) {
     const auto json_path =
         std::filesystem::temp_directory_path() / "ot-github-releases.json";
+    // Ответ GitHub должен быть свежим: старый файл из прошлой проверки
+    // нельзя переиспользовать, иначе приложение навсегда увидит один и тот
+    // же список релизов. download_resumable пропускает существующий файл,
+    // поэтому удаляем и ответ, и его .part.
+    std::error_code cache_error;
+    std::filesystem::remove(json_path, cache_error);
+    std::filesystem::remove(
+        std::filesystem::path(json_path).concat(".part"), cache_error);
     download_resumable(
         {std::string{kGithubReleasesApi}},
         json_path,

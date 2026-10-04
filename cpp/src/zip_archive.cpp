@@ -18,6 +18,9 @@ namespace {
 constexpr std::uint32_t kLocalSig = 0x04034b50;
 constexpr std::uint32_t kCentralSig = 0x02014b50;
 constexpr std::uint32_t kEocdSig = 0x06054b50;
+// Предел на один файл внутри ZIP: языковые модели и портативная сборка
+// занимают сотни мегабайт, 4 ГиБ с запасом — защита от zip-бомбы.
+constexpr std::size_t kMaxEntrySize = std::size_t{4} * 1024 * 1024 * 1024;
 
 std::uint16_t read_u16(const unsigned char* data) {
     return static_cast<std::uint16_t>(data[0] | (data[1] << 8));
@@ -114,6 +117,12 @@ std::vector<unsigned char> inflate_raw(
             buffer.begin(),
             buffer.begin() + static_cast<std::ptrdiff_t>(
                                   buffer.size() - stream.avail_out));
+        // Защита от «zip-бомбы»: распакованный объём не должен превышать
+        // заявленный в каталоге размер (с небольшим запасом на округление).
+        if (out.size() > kMaxEntrySize) {
+            inflateEnd(&stream);
+            throw std::runtime_error("Слишком большой распакованный объём в ZIP");
+        }
         if (status == Z_BUF_ERROR && stream.avail_in == 0) {
             break;
         }
@@ -184,9 +193,12 @@ void extract_zip(
         throw std::runtime_error("Не найден каталог ZIP: " + zip_path.string());
     }
 
-    const auto central_size = read_u32(data.data() + eocd + 12);
-    const auto central_offset = read_u32(data.data() + eocd + 16);
-    if (central_offset + central_size > data.size()) {
+    // Смещения из полей ZIP расширены до uint32, поэтому приводим их к
+    // size_t до арифметики: иначе сумма переполняется по модулю 2^32,
+    // проверка границ проходит, а чтение уходит за пределы буфера.
+    const std::size_t central_size = read_u32(data.data() + eocd + 12);
+    const std::size_t central_offset = read_u32(data.data() + eocd + 16);
+    if (central_offset > data.size() || central_size > data.size() - central_offset) {
         throw std::runtime_error("Повреждён центральный каталог ZIP");
     }
 
@@ -197,13 +209,14 @@ void extract_zip(
         if (read_u32(data.data() + cursor) != kCentralSig) {
             throw std::runtime_error("Повреждена запись центрального каталога ZIP");
         }
+        const std::uint32_t expected_crc = read_u32(data.data() + cursor + 16);
         const auto method = read_u16(data.data() + cursor + 10);
-        const auto compressed_size = read_u32(data.data() + cursor + 20);
-        const auto uncompressed_size = read_u32(data.data() + cursor + 24);
+        const std::size_t compressed_size = read_u32(data.data() + cursor + 20);
+        const std::size_t uncompressed_size = read_u32(data.data() + cursor + 24);
         const auto name_len = read_u16(data.data() + cursor + 28);
         const auto extra_len = read_u16(data.data() + cursor + 30);
         const auto comment_len = read_u16(data.data() + cursor + 32);
-        const auto local_offset = read_u32(data.data() + cursor + 42);
+        const std::size_t local_offset = read_u32(data.data() + cursor + 42);
         if (cursor + 46 + name_len > data.size()) {
             throw std::runtime_error("Обрезанное имя файла в ZIP");
         }
@@ -217,7 +230,10 @@ void extract_zip(
         if (!is_safe_entry_name(name)) {
             throw std::runtime_error("Небезопасное имя в ZIP: " + name);
         }
-        if (local_offset + 30 > data.size()) {
+        if (uncompressed_size > kMaxEntrySize) {
+            throw std::runtime_error("Слишком большой файл в ZIP: " + name);
+        }
+        if (local_offset > data.size() || data.size() - local_offset < 30) {
             throw std::runtime_error("Смещение локального заголовка ZIP вне файла");
         }
         if (read_u32(data.data() + local_offset) != kLocalSig) {
@@ -225,9 +241,12 @@ void extract_zip(
         }
         const auto local_name_len = read_u16(data.data() + local_offset + 26);
         const auto local_extra_len = read_u16(data.data() + local_offset + 28);
-        const std::size_t data_offset =
-            local_offset + 30 + local_name_len + local_extra_len;
-        if (data_offset + compressed_size > data.size()) {
+        const std::size_t header_size = 30 + local_name_len + local_extra_len;
+        if (local_offset > data.size() || data.size() - local_offset < header_size) {
+            throw std::runtime_error("Повреждён локальный заголовок ZIP");
+        }
+        const std::size_t data_offset = local_offset + header_size;
+        if (compressed_size > data.size() - data_offset) {
             throw std::runtime_error("Обрезанные данные ZIP: " + name);
         }
         const unsigned char* payload = data.data() + data_offset;
@@ -235,16 +254,26 @@ void extract_zip(
         const unsigned char* out_ptr = payload;
         std::size_t out_size = uncompressed_size;
         if (method == 0) {
-            if (compressed_size < uncompressed_size) {
-                out_size = compressed_size;
-            }
+            out_size = compressed_size;
         } else if (method == 8) {
             unpacked = inflate_raw(payload, compressed_size, uncompressed_size);
+            out_ptr = unpacked.data();
+            out_size = unpacked.size();
+            if (uncompressed_size != 0 && out_size != uncompressed_size) {
+                throw std::runtime_error(
+                    "Неверный размер файла в ZIP: " + name);
+            }
             out_ptr = unpacked.data();
             out_size = unpacked.size();
         } else {
             throw std::runtime_error(
                 "Неподдерживаемый метод сжатия ZIP: " + std::to_string(method));
+        }
+        // Сверяем CRC32 из центрального каталога: без этого «битый» пакет
+        // молча распаковывался бы в повреждённые файлы.
+        if (out_size > 0 &&
+            crc32_of(out_ptr, out_size) != expected_crc) {
+            throw std::runtime_error("Контрольная сумма ZIP не совпадает: " + name);
         }
         write_file(destination / name, out_ptr, out_size);
     }

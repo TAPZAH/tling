@@ -55,16 +55,20 @@ std::optional<unsigned> parse_key(const std::string& token) {
         return std::nullopt;
     }
     if (token[0] == 'f' || token[0] == 'F') {
-        bool digits = true;
-        for (std::size_t i = 1; i < token.size(); ++i) {
-            if (!std::isdigit(static_cast<unsigned char>(token[i]))) {
-                digits = false;
-                break;
+        // Номер F-клавиши разбираем вручную: std::stoi бросил бы
+        // std::out_of_range на «F999999999», а это значение приходит из
+        // settings.json и приводило к сбросу всех настроек.
+        if (token.size() >= 2 && token.size() <= 3) {
+            int number = 0;
+            bool digits = true;
+            for (std::size_t i = 1; i < token.size(); ++i) {
+                if (!std::isdigit(static_cast<unsigned char>(token[i]))) {
+                    digits = false;
+                    break;
+                }
+                number = number * 10 + (token[i] - '0');
             }
-        }
-        if (digits && token.size() > 1) {
-            const int number = std::stoi(token.substr(1));
-            if (number >= 1 && number <= 24) {
+            if (digits && number >= 1 && number <= 24) {
                 return 0x70u + static_cast<unsigned>(number - 1);
             }
         }
