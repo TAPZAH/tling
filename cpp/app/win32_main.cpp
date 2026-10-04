@@ -1,4 +1,4 @@
-#include "offline_translator/app_log.hpp"
+﻿#include "offline_translator/app_log.hpp"
 #include "offline_translator/app_language.hpp"
 #include "offline_translator/app_settings.hpp"
 #include "offline_translator/app_update.hpp"
@@ -165,6 +165,7 @@ HWND g_settings_install_update = nullptr;
 HWND g_settings_open_releases = nullptr;
 HWND g_settings_update_status = nullptr;
 HWND g_settings_engine_combo = nullptr;
+HWND g_settings_behavior_summary = nullptr;
 HWND g_settings_ui_language = nullptr;
 std::atomic<bool> g_update_busy{false};
 std::optional<offline_translator::UpdateInfo> g_pending_update;
@@ -719,6 +720,70 @@ extern HWND g_settings_nav[];
 std::unordered_map<HWND, std::wstring> g_ui_originals;
 std::unordered_map<HWND, std::vector<std::wstring>> g_ui_combo_originals;
 
+void update_behavior_summary() {
+    if (!g_settings_behavior_summary || !IsWindow(g_settings_behavior_summary)) {
+        return;
+    }
+    const auto checked = [](HWND control) {
+        return control &&
+            SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    };
+    const bool only_hotkey = checked(g_settings_only_ctrl_c_c);
+    const bool double_ctrl_c = checked(g_settings_double_ctrl_c);
+    std::wstring hold = L"без клавиши удержания";
+    if (g_settings_popup_modifier) {
+        const std::string modifier =
+            popup_modifier_from_combo(g_settings_popup_modifier);
+        if (modifier == offline_translator::kPopupModifierCtrl) {
+            hold = L"если удерживать Ctrl";
+        } else if (modifier == offline_translator::kPopupModifierAlt) {
+            hold = L"если удерживать Alt";
+        } else if (modifier == offline_translator::kPopupModifierShift) {
+            hold = L"если удерживать Shift";
+        }
+    }
+    std::vector<std::wstring> keys;
+    if (only_hotkey) {
+        keys.push_back(L"Кнопка у курсора после выделения выключена");
+        keys.push_back(L"Перевод запускается только по Ctrl+C+C");
+    } else {
+        keys.push_back(
+            L"Кнопка у курсора после выделения: " + hold);
+        if (double_ctrl_c || only_hotkey) {
+            keys.push_back(L"Дополнительно работает перевод по Ctrl+C+C");
+        } else {
+            keys.push_back(L"Перевод по Ctrl+C+C выключен");
+        }
+    }
+    const bool turbo = g_runtime && g_runtime->settings.turbo_translation;
+    keys.push_back(
+        turbo ? L"Турбо перевод включён" : L"Турбо перевод выключен");
+    if (checked(g_settings_selectable)) {
+        keys.push_back(L"Окно результата: можно выделить текст, закрыть кнопкой");
+    } else {
+        keys.push_back(L"Окно результата: закрывается нажатием по окну");
+    }
+    keys.push_back(
+        checked(g_settings_autostart)
+            ? L"Запуск вместе с Windows включён"
+            : L"Запуск вместе с Windows выключен");
+
+    // Строки собираем из ключей и переводим по одной: так работает
+    // переключение языка интерфейса без пересоздания окна.
+    std::wstring russian;
+    std::wstring visible;
+    for (std::size_t index = 0; index < keys.size(); ++index) {
+        if (index > 0) {
+            russian += L"\r\n";
+            visible += L"\r\n";
+        }
+        russian += keys[index];
+        visible += L"• " + offline_translator::tr(keys[index]);
+    }
+    g_ui_originals[g_settings_behavior_summary] = russian;
+    SetWindowTextW(g_settings_behavior_summary, visible.c_str());
+}
+
 void localize_control_text(HWND control) {
     if (!control || !IsWindow(control)) {
         return;
@@ -817,6 +882,9 @@ void relocalize_all() {
             },
             0);
     }
+    // Сводка поведения собирается из ключей и переводится целиком, поэтому
+    // обновляем её после общего прохода локализации.
+    update_behavior_summary();
 }
 
 LRESULT localized_message_box(
@@ -3882,6 +3950,7 @@ void close_settings_window() {
     g_settings_save = nullptr;
     g_settings_cancel = nullptr;
     g_settings_engine_combo = nullptr;
+    g_settings_behavior_summary = nullptr;
     for (int index = 0; index < 5; ++index) {
         g_settings_nav[index] = nullptr;
     }
@@ -4099,13 +4168,39 @@ LRESULT CALLBACK settings_proc_impl(
             28,
             kSettingsPackagesButton);
         // ===== Страница «Поведение» =====
+        // Сводка выбранных опций поведения (как в ранних версиях):
+        // рамка «Сейчас работает» с буллетами, обновляется при изменении
+        // любого переключателя на странице.
+        HWND summary_title = content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Сейчас работает",
+            0,
+            16,
+            16,
+            340,
+            24);
+        SendMessageW(
+            summary_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        g_settings_behavior_summary = content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"",
+            0,
+            36,
+            44,
+            440,
+            110);
         HWND behavior_title = content(
             kSettingsPageBehavior,
             L"STATIC",
             L"Перевод выделенного текста",
             0,
             16,
-            16,
+            162,
             340,
             24);
         SendMessageW(
@@ -4119,7 +4214,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Клавиша удержания для кнопки перевода:",
             0,
             16,
-            48,
+            194,
             300,
             18);
         g_settings_popup_modifier = content(
@@ -4128,7 +4223,7 @@ LRESULT CALLBACK settings_proc_impl(
             nullptr,
             CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
             16,
-            70,
+            216,
             240,
             160,
             kSettingsPopupModifier);
@@ -4141,7 +4236,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Переводить выделенный текст по Ctrl+C+C",
             BS_AUTOCHECKBOX | WS_TABSTOP,
             16,
-            102,
+            248,
             470,
             24,
             kSettingsDoubleCtrlC);
@@ -4156,7 +4251,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Только Ctrl+C+C (не показывать кнопку при выделении)",
             BS_AUTOCHECKBOX | WS_TABSTOP,
             16,
-            130,
+            276,
             470,
             24,
             kSettingsOnlyCtrlCC);
@@ -4171,7 +4266,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Ctrl+C+C: удерживайте Ctrl и дважды нажмите C. Перевод появится рядом с курсором. Режим «только Ctrl+C+C» не перехватывает обычные Ctrl+C/Ctrl+V.",
             0,
             36,
-            158,
+            304,
             440,
             54);
         content(
@@ -4180,7 +4275,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Окно результата:",
             0,
             16,
-            218,
+            364,
             300,
             18);
         g_settings_click_to_close = content(
@@ -4189,7 +4284,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Закрывать нажатием по окну",
             BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
             16,
-            240,
+            386,
             300,
             22,
             kSettingsClickToClose);
@@ -4199,7 +4294,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Выделять часть текста; закрывать кнопкой «Закрыть»",
             BS_AUTORADIOBUTTON | WS_TABSTOP,
             16,
-            264,
+            410,
             420,
             22,
             kSettingsSelectable);
@@ -4221,7 +4316,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Автоматически копировать выделенный текст в буфер обмена",
             BS_AUTOCHECKBOX | WS_TABSTOP,
             16,
-            294,
+            440,
             470,
             24,
             kSettingsAutoCopy);
@@ -4236,7 +4331,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"После выделения текст останется в буфере: его не нужно копировать вручную. Без этой настройки захват для перевода буфер не меняет.",
             0,
             36,
-            322,
+            468,
             440,
             54);
         content(
@@ -4245,7 +4340,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Хранить последние копирования (1–50):",
             0,
             16,
-            382,
+            528,
             280,
             20);
         const int history_limit =
@@ -4257,7 +4352,7 @@ LRESULT CALLBACK settings_proc_impl(
             std::to_wstring(history_limit).c_str(),
             WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP,
             300,
-            378,
+            524,
             48,
             24,
             kSettingsHistoryLimit);
@@ -4267,7 +4362,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Горячая клавиша перевода выделения:",
             0,
             16,
-            414,
+            560,
             300,
             18);
         g_settings_hotkey_edit = content(
@@ -4276,7 +4371,7 @@ LRESULT CALLBACK settings_proc_impl(
             from_utf8(settings.translate_hotkey).c_str(),
             WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
             16,
-            436,
+            582,
             240,
             24,
             kSettingsHotkeyEdit);
@@ -4286,7 +4381,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Запуск",
             0,
             16,
-            474,
+            620,
             200,
             26);
         SendMessageW(
@@ -4300,7 +4395,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Запускать вместе с Windows",
             BS_AUTOCHECKBOX | WS_TABSTOP,
             16,
-            504,
+            650,
             400,
             24,
             kSettingsAutostart);
@@ -4554,6 +4649,7 @@ LRESULT CALLBACK settings_proc_impl(
         g_settings_page = kSettingsPageBehavior;
         settings_show_page(window, kSettingsPageBehavior);
         localize_window(window);
+        update_behavior_summary();
         return 0;
     }
     if (message == WM_VSCROLL) {
@@ -4757,6 +4853,18 @@ LRESULT CALLBACK settings_proc_impl(
                     BST_CHECKED,
                     0);
             }
+            update_behavior_summary();
+            return 0;
+        }
+        if (notification == BN_CLICKED &&
+            (id == kSettingsDoubleCtrlC || id == kSettingsAutoCopy ||
+             id == kSettingsAutostart || id == kSettingsClickToClose ||
+             id == kSettingsSelectable)) {
+            update_behavior_summary();
+            return 0;
+        }
+        if (id == kSettingsPopupModifier && notification == CBN_SELCHANGE) {
+            update_behavior_summary();
             return 0;
         }
         if (id == kSettingsSave) {
@@ -4817,6 +4925,7 @@ LRESULT CALLBACK settings_proc_impl(
         g_settings_save = nullptr;
         g_settings_cancel = nullptr;
         g_settings_engine_combo = nullptr;
+    g_settings_behavior_summary = nullptr;
         for (int index = 0; index < 5; ++index) {
             g_settings_nav[index] = nullptr;
         }

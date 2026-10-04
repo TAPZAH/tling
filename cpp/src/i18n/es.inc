@@ -1,5 +1,5 @@
 // Испанский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 135> kStringsEs{{
+constexpr std::array<Pair, 148> kStringsEs{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copiar autom\u00e1ticamente el texto seleccionado al portapapeles"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Versi\u00f3n: "},
@@ -133,5 +133,18 @@ constexpr std::array<Pair, 135> kStringsEs{{
     {L"Турбо перевод включён", L"Traducci\u00f3n turbo activada"},
     {L"Турбо перевод выключен", L"Traducci\u00f3n turbo desactivada"},
     {L"Доступно обновление", L"Actualizaci\u00f3n disponible"},
-    {L"Обновлений нет", L"No hay actualizaciones"}
+    {L"Обновлений нет", L"No hay actualizaciones"},
+    {L"Сейчас работает", L"Actualmente activo"},
+    {L"Кнопка у курсора после выделения выключена", L"El bot\u00f3n del cursor tras la selecci\u00f3n est\u00e1 desactivado"},
+    {L"Перевод запускается только по Ctrl+C+C", L"La traducci\u00f3n solo se inicia con Ctrl+C+C"},
+    {L"Кнопка у курсора после выделения: без клавиши удержания", L"Bot\u00f3n del cursor tras la selecci\u00f3n: sin tecla mantenida"},
+    {L"Кнопка у курсора после выделения: если удерживать Ctrl", L"Bot\u00f3n del cursor tras la selecci\u00f3n: manteniendo Ctrl"},
+    {L"Кнопка у курсора после выделения: если удерживать Alt", L"Bot\u00f3n del cursor tras la selecci\u00f3n: manteniendo Alt"},
+    {L"Кнопка у курсора после выделения: если удерживать Shift", L"Bot\u00f3n del cursor tras la selecci\u00f3n: manteniendo May\u00fas"},
+    {L"Дополнительно работает перевод по Ctrl+C+C", L"La traducci\u00f3n con Ctrl+C+C tambi\u00e9n funciona"},
+    {L"Перевод по Ctrl+C+C выключен", L"La traducci\u00f3n con Ctrl+C+C est\u00e1 desactivada"},
+    {L"Окно результата: можно выделить текст, закрыть кнопкой", L"Ventana de resultado: se puede seleccionar el texto y cerrar con el bot\u00f3n"},
+    {L"Окно результата: закрывается нажатием по окну", L"Ventana de resultado: se cierra al hacer clic"},
+    {L"Запуск вместе с Windows включён", L"Inicio con Windows activado"},
+    {L"Запуск вместе с Windows выключен", L"Inicio con Windows desactivado"}
 }};

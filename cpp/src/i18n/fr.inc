@@ -1,5 +1,5 @@
 // Французский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 135> kStringsFr{{
+constexpr std::array<Pair, 148> kStringsFr{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copier automatiquement le texte s\u00e9lectionn\u00e9 dans le presse-papiers"},
     {L"Автор: ", L"Auteur : "},
     {L"Версия: ", L"Version : "},
@@ -133,5 +133,18 @@ constexpr std::array<Pair, 135> kStringsFr{{
     {L"Турбо перевод включён", L"Traduction turbo activ\u00e9e"},
     {L"Турбо перевод выключен", L"Traduction turbo d\u00e9sactiv\u00e9e"},
     {L"Доступно обновление", L"Mise \u00e0 jour disponible"},
-    {L"Обновлений нет", L"Aucune mise \u00e0 jour"}
+    {L"Обновлений нет", L"Aucune mise \u00e0 jour"},
+    {L"Сейчас работает", L"Actuellement actif"},
+    {L"Кнопка у курсора после выделения выключена", L"Bouton curseur apr\u00e8s la s\u00e9lection d\u00e9sactiv\u00e9"},
+    {L"Перевод запускается только по Ctrl+C+C", L"La traduction ne d\u00e9marre qu\u2019avec Ctrl+C+C"},
+    {L"Кнопка у курсора после выделения: без клавиши удержания", L"Bouton curseur apr\u00e8s la s\u00e9lection : sans touche enfonc\u00e9e"},
+    {L"Кнопка у курсора после выделения: если удерживать Ctrl", L"Bouton curseur apr\u00e8s la s\u00e9lection : en maintenant Ctrl"},
+    {L"Кнопка у курсора после выделения: если удерживать Alt", L"Bouton curseur apr\u00e8s la s\u00e9lection : en maintenant Alt"},
+    {L"Кнопка у курсора после выделения: если удерживать Shift", L"Bouton curseur apr\u00e8s la s\u00e9lection : en maintenant Maj"},
+    {L"Дополнительно работает перевод по Ctrl+C+C", L"La traduction par Ctrl+C+C fonctionne \u00e9galement"},
+    {L"Перевод по Ctrl+C+C выключен", L"La traduction par Ctrl+C+C est d\u00e9sactiv\u00e9e"},
+    {L"Окно результата: можно выделить текст, закрыть кнопкой", L"Fen\u00eatre de r\u00e9sultat : le texte peut \u00eatre s\u00e9lectionn\u00e9 puis ferm\u00e9 avec le bouton"},
+    {L"Окно результата: закрывается нажатием по окну", L"Fen\u00eatre de r\u00e9sultat : se ferme au clic"},
+    {L"Запуск вместе с Windows включён", L"Lancement avec Windows activ\u00e9"},
+    {L"Запуск вместе с Windows выключен", L"Lancement avec Windows d\u00e9sactiv\u00e9"}
 }};

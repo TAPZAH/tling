@@ -1,5 +1,5 @@
 // Английский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 135> kStringsEn{{
+constexpr std::array<Pair, 148> kStringsEn{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Automatically copy the selected text to the clipboard"},
     {L"Автор: ", L"Author: "},
     {L"Версия: ", L"Version: "},
@@ -133,5 +133,18 @@ constexpr std::array<Pair, 135> kStringsEn{{
     {L"Турбо перевод включён", L"Turbo translation enabled"},
     {L"Турбо перевод выключен", L"Turbo translation disabled"},
     {L"Доступно обновление", L"Update available"},
-    {L"Обновлений нет", L"No updates found"}
+    {L"Обновлений нет", L"No updates found"},
+    {L"Сейчас работает", L"Currently active"},
+    {L"Кнопка у курсора после выделения выключена", L"Cursor button after selection is off"},
+    {L"Перевод запускается только по Ctrl+C+C", L"Translation runs only with Ctrl+C+C"},
+    {L"Кнопка у курсора после выделения: без клавиши удержания", L"Cursor button after selection: no modifier key"},
+    {L"Кнопка у курсора после выделения: если удерживать Ctrl", L"Cursor button after selection: while holding Ctrl"},
+    {L"Кнопка у курсора после выделения: если удерживать Alt", L"Cursor button after selection: while holding Alt"},
+    {L"Кнопка у курсора после выделения: если удерживать Shift", L"Cursor button after selection: while holding Shift"},
+    {L"Дополнительно работает перевод по Ctrl+C+C", L"Ctrl+C+C translation also works"},
+    {L"Перевод по Ctrl+C+C выключен", L"Ctrl+C+C translation is off"},
+    {L"Окно результата: можно выделить текст, закрыть кнопкой", L"Result window: text can be selected, close with the button"},
+    {L"Окно результата: закрывается нажатием по окну", L"Result window: closes when clicked"},
+    {L"Запуск вместе с Windows включён", L"Launch with Windows is on"},
+    {L"Запуск вместе с Windows выключен", L"Launch with Windows is off"}
 }};

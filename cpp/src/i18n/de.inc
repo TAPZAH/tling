@@ -1,5 +1,5 @@
 // Немецкий словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 135> kStringsDe{{
+constexpr std::array<Pair, 148> kStringsDe{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Ausgew\u00e4hlten Text automatisch in die Zwischenablage kopieren"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Version: "},
@@ -133,5 +133,18 @@ constexpr std::array<Pair, 135> kStringsDe{{
     {L"Турбо перевод включён", L"Turbo-\u00dcbersetzung aktiviert"},
     {L"Турбо перевод выключен", L"Turbo-\u00dcbersetzung deaktiviert"},
     {L"Доступно обновление", L"Update verf\u00fcgbar"},
-    {L"Обновлений нет", L"Keine Updates verf\u00fcgbar"}
+    {L"Обновлений нет", L"Keine Updates verf\u00fcgbar"},
+    {L"Сейчас работает", L"Aktuell aktiv"},
+    {L"Кнопка у курсора после выделения выключена", L"Cursor-Schaltfl\u00e4che nach der Auswahl ist aus"},
+    {L"Перевод запускается только по Ctrl+C+C", L"\u00dcbersetzung startet nur mit Strg+C+C"},
+    {L"Кнопка у курсора после выделения: без клавиши удержания", L"Cursor-Schaltfl\u00e4che nach der Auswahl: ohne gedr\u00fcckte Taste"},
+    {L"Кнопка у курсора после выделения: если удерживать Ctrl", L"Cursor-Schaltfl\u00e4che nach der Auswahl: bei gedr\u00fccktem Strg"},
+    {L"Кнопка у курсора после выделения: если удерживать Alt", L"Cursor-Schaltfl\u00e4che nach der Auswahl: bei gedr\u00fccktem Alt"},
+    {L"Кнопка у курсора после выделения: если удерживать Shift", L"Cursor-Schaltfl\u00e4che nach der Auswahl: bei gedr\u00fccktem Umschalt"},
+    {L"Дополнительно работает перевод по Ctrl+C+C", L"\u00dcbersetzung per Strg+C+C funktioniert zus\u00e4tzlich"},
+    {L"Перевод по Ctrl+C+C выключен", L"\u00dcbersetzung per Strg+C+C ist aus"},
+    {L"Окно результата: можно выделить текст, закрыть кнопкой", L"Ergebnisfenster: Text kann markiert und mit der Schaltfl\u00e4che geschlossen werden"},
+    {L"Окно результата: закрывается нажатием по окну", L"Ergebnisfenster: schlie\u00dft sich beim Klick"},
+    {L"Запуск вместе с Windows включён", L"Start mit Windows ist an"},
+    {L"Запуск вместе с Windows выключен", L"Start mit Windows ist aus"}
 }};
