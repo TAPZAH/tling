@@ -1,4 +1,4 @@
-#include "file_transfer.hpp"
+﻿#include "file_transfer.hpp"
 #include "fs_utils.hpp"
 #include "offline_translator/app_log.hpp"
 
@@ -28,7 +28,7 @@ namespace {
 constexpr std::size_t kChunkSize = 64 * 1024;
 constexpr std::uint64_t kProgressStep = 1024 * 1024;
 constexpr wchar_t kUserAgent[] =
-    L"offline-translator/0.99.3-beta (cpp-model-management)";
+    L"offline-translator/0.99.4-beta (cpp-model-management)";
 
 void report_progress(
     const ProgressCallback& progress,
