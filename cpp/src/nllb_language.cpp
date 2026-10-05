@@ -67,6 +67,14 @@ std::string nllb_language_code(std::string_view language_code) {
         {"gl", "glg_Latn"},
         {"ur", "urd_Arab"},
         {"ka", "kat_Geor"},
+        {"eo", "epo_Latn"},
+        {"eu", "eus_Latn"},
+        {"ga", "gle_Latn"},
+        {"ky", "kir_Cyrl"},
+        {"pb", "por_Latn"},
+        {"sw", "swh_Latn"},
+        {"tl", "tgl_Latn"},
+        {"zt", "zho_Hant"},
     };
     const auto found = codes.find(std::string(language_code));
     if (found == codes.end()) {

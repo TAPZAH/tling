@@ -184,26 +184,26 @@ using namespace offline_translator;
 int main() {
     try {
     const NllbModelManager model_manager("C:/offline-translator-test-models");
-    assert(model_manager.model_path().filename() == "nllb-200-distilled-600M");
-    assert(!model_manager.is_installed());
+    require(model_manager.model_path().filename() == "nllb-200-distilled-600M", "путь модели NLLB");
+    require(!model_manager.is_installed(), "пустой корень NLLB не установлен");
     bool model_validation_thrown = false;
     try {
         model_manager.validate();
     } catch (const std::runtime_error&) {
         model_validation_thrown = true;
     }
-    assert(model_validation_thrown);
+    require(model_validation_thrown, "validate() бросает без модели");
 
-    assert(nllb_language_code("en") == "eng_Latn");
-    assert(nllb_language_code("ru") == "rus_Cyrl");
-    assert(nllb_language_code("rus_Cyrl") == "rus_Cyrl");
+    require(nllb_language_code("en") == "eng_Latn", "NLLB-код en");
+    require(nllb_language_code("ru") == "rus_Cyrl", "NLLB-код ru");
+    require(nllb_language_code("rus_Cyrl") == "rus_Cyrl", "готовый NLLB-код сохраняется");
     bool unknown_language_thrown = false;
     try {
         static_cast<void>(nllb_language_code("xx"));
     } catch (const std::runtime_error&) {
         unknown_language_thrown = true;
     }
-    assert(unknown_language_thrown);
+    require(unknown_language_thrown, "неизвестный язык NLLB бросает");
 
     {
         require(split_sentences("").empty(), "пустой текст без предложений");
@@ -236,14 +236,14 @@ int main() {
                    "] " + std::string(text);
         };
 
-    assert(english_pivot_route(is_installed, "ru", "en") == "direct");
-    assert(!english_pivot_route(is_installed, "ru", "ru").has_value());
-    assert(!english_pivot_route(is_installed, "de", "fr").has_value());
+    require(english_pivot_route(is_installed, "ru", "en") == "direct", "ru->en прямой маршрут");
+    require(!english_pivot_route(is_installed, "ru", "ru").has_value(), "ru->ru без маршрута");
+    require(!english_pivot_route(is_installed, "de", "fr").has_value(), "de->fr без моделей");
 
+    // В наборе уже есть en->fr, поэтому для de->fr не хватает только de->en.
     const auto needed = needed_english_pivot_pairs("de", "fr", is_installed);
-    assert(needed.size() == 2);
-    assert((needed[0] == LanguagePair{"de", "en"}));
-    assert((needed[1] == LanguagePair{"en", "fr"}));
+    require(needed.size() == 1, "нужна одна модель для пивота de->fr");
+    require((needed[0] == LanguagePair{"de", "en"}), "недостающая нога de->en");
 
     const auto argos_test_root =
         std::filesystem::temp_directory_path() / "offline-translator-argos-test";
@@ -260,8 +260,34 @@ int main() {
         std::ofstream(argos_package / file_name).put('\0');
     }
     const ArgosModelManager argos_manager(argos_test_root, "en", "ru");
-    assert(argos_manager.package_path() == argos_package);
-    assert(argos_manager.is_installed());
+    require(argos_manager.package_path() == argos_package, "путь пакета Argos");
+    require(argos_manager.is_installed(), "пакет Argos установлен");
+
+    // Новый формат пакета Argos (1.5+): без model/config.json и со
+    // shared_vocabulary.txt вместо shared_vocabulary.json.
+    const auto argos_new_package = argos_test_root / "translate-eo_en-1_5";
+    std::filesystem::create_directories(argos_new_package / "model");
+    for (const auto file_name : {
+             "model/model.bin",
+             "model/shared_vocabulary.txt",
+             "sentencepiece.model",
+         }) {
+        std::ofstream(argos_new_package / file_name).put('\0');
+    }
+    const ArgosModelManager argos_new_manager(argos_test_root, "eo", "en");
+    require(
+        argos_new_manager.is_installed(),
+        "пакет Argos нового формата распознаётся");
+
+    // Пакет без словаря любого формата не считается установленным.
+    const auto argos_broken_package = argos_test_root / "translate-en_tl-1_9";
+    std::filesystem::create_directories(argos_broken_package / "model");
+    std::ofstream(argos_broken_package / "model" / "model.bin").put('\0');
+    std::ofstream(argos_broken_package / "sentencepiece.model").put('\0');
+    const ArgosModelManager argos_broken_manager(argos_test_root, "en", "tl");
+    require(
+        !argos_broken_manager.is_installed(),
+        "пакет без словаря не считается установленным");
     std::filesystem::remove_all(argos_test_root);
 
     const auto marian_root =
@@ -306,17 +332,17 @@ int main() {
 
     TranslationService service(is_installed, direct_translate, "Test");
     const auto direct = service.translate(" hello ", "ru", "en");
-    assert(direct.text == "[ru>en] hello");
-    assert(!direct.intermediate.has_value());
+    require(direct.text == "[ru>en] hello", "прямой перевод");
+    require(!direct.intermediate.has_value(), "у прямого перевода нет промежуточного");
 
     const auto pivot = service.translate(" привет ", "ru", "fr");
-    assert(pivot.text == "[en>fr] [ru>en] привет");
-    assert(pivot.intermediate == "[ru>en] привет");
-    assert(pivot.pivot_code == "en");
+    require(pivot.text == "[en>fr] [ru>en] привет", "пивот через английский");
+    require(pivot.intermediate == "[ru>en] привет", "промежуточный текст пивота");
+    require(pivot.pivot_code == "en", "код пивота en");
 
     const auto empty = service.translate("   ", "ru", "fr");
-    assert(empty.text == "   ");
-    assert(!empty.intermediate.has_value());
+    require(empty.text == "   ", "пустой ввод возвращается как есть");
+    require(!empty.intermediate.has_value(), "у пустого ввода нет пивота");
 
     bool missing_thrown = false;
     try {
@@ -325,7 +351,7 @@ int main() {
         missing_thrown = std::string(error.what()).find("de->en") !=
                          std::string::npos;
     }
-    assert(missing_thrown);
+    require(missing_thrown, "ошибка называет недостающую модель de->en");
 
     service.stop();
     bool stopped_thrown = false;
@@ -334,7 +360,7 @@ int main() {
     } catch (const std::runtime_error&) {
         stopped_thrown = true;
     }
-    assert(stopped_thrown);
+    require(stopped_thrown, "остановленный сервис бросает");
 
     const auto nllb_root =
         std::filesystem::temp_directory_path() / "offline-translator-nllb-mgmt";
@@ -589,7 +615,7 @@ int main() {
     }
     {
         const auto& languages = supported_languages();
-        require(languages.size() == 56, "таблица языков: 56 записей");
+        require(languages.size() == 64, "таблица языков: 64 записи");
         std::set<std::string> unique_codes;
         for (const auto& entry : languages) {
             unique_codes.insert(entry.code);
@@ -609,6 +635,12 @@ int main() {
         require(
             language_store_name("zz") == "zz",
             "неизвестный код без fallback → сам код");
+        // Языки, которые предлагает Argos, должны быть в списке окна.
+        for (const auto code : {"eo", "eu", "ga", "ky", "pb", "sw", "tl", "zt"}) {
+            require(
+                language_store_name(code) != code,
+                std::string("язык Argos есть в списке: ") + code);
+        }
 
         PackageInfo en_ru;
         en_ru.from_code = "en";
@@ -799,6 +831,33 @@ int main() {
             }
         }
         require(saw_en_ru, "en→ru в списке установленных");
+
+        // Пивот через английский для Firefox: tr→ru возможен только если
+        // установлены tr→en и en→ru. Проверяем, что при наличии только
+        // en→ru недостающей называется именно tr→en (случай из отчёта).
+        const auto firefox_installed =
+            [&root](std::string_view from, std::string_view to) {
+                return offline_translator::FirefoxModelManager(
+                           root,
+                           "tiny",
+                           std::string(from),
+                           std::string(to))
+                    .is_installed();
+            };
+        require(
+            firefox_installed("en", "ru"),
+            "Firefox en→ru найден для пивота");
+        require(
+            !firefox_installed("tr", "en"),
+            "Firefox tr→en отсутствует");
+        const auto tr_ru_needed = offline_translator::needed_english_pivot_pairs(
+            "tr", "ru", firefox_installed);
+        require(
+            tr_ru_needed.size() == 1,
+            "для tr→ru нужна ровно одна модель");
+        require(
+            tr_ru_needed[0] == offline_translator::LanguagePair{"tr", "en"},
+            "недостающая модель для tr→ru — tr→en");
 
         // Каталог: без кэша → встроенный fallback; запись en→ru есть.
         const auto available_base =

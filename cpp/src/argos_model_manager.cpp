@@ -24,11 +24,16 @@ constexpr std::string_view kDefaultPackageVersion = "1_9";
 constexpr std::string_view kDefaultIndexUrl =
     "https://raw.githubusercontent.com/argosopentech/argospm-index/main/"
     "index.json";
-constexpr std::array<std::string_view, 4> kRequiredFiles{
+// Обязательные файлы пакета Argos. Новый формат (начиная с 1.5) не
+// содержит model/config.json, а словарь кладёт в shared_vocabulary.txt,
+// поэтому состав проверяется отдельно в package_files_ready().
+constexpr std::array<std::string_view, 2> kRequiredFiles{
     "model/model.bin",
-    "model/config.json",
-    "model/shared_vocabulary.json",
     "sentencepiece.model",
+};
+constexpr std::array<std::string_view, 2> kSharedVocabularies{
+    "model/shared_vocabulary.json",
+    "model/shared_vocabulary.txt",
 };
 
 const std::array<PackageInfo, 2> kEmbeddedCatalog{{
@@ -401,7 +406,13 @@ bool ArgosModelManager::package_files_ready(
                 return false;
             }
         }
-        return true;
+        // Подходит любой из форматов словаря: .json (старый) или .txt (новый).
+        for (const auto file_name : kSharedVocabularies) {
+            if (std::filesystem::is_regular_file(package / file_name)) {
+                return true;
+            }
+        }
+        return false;
     } catch (const std::filesystem::filesystem_error&) {
         return false;
     }
