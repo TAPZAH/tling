@@ -1,5 +1,5 @@
 // Немецкий словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 150> kStringsDe{{
+constexpr std::array<Pair, 151> kStringsDe{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Ausgew\u00e4hlten Text automatisch in die Zwischenablage kopieren"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Version: "},
@@ -148,5 +148,6 @@ constexpr std::array<Pair, 150> kStringsDe{{
     {L"Запуск вместе с Windows включён", L"Start mit Windows ist an"},
     {L"Запуск вместе с Windows выключен", L"Start mit Windows ist aus"},
     {L"Нет модели", L"Kein Modell"},
-    {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"F\u00fcr das gew\u00e4hlte Sprachenpaar ist kein Modell installiert. Das Fenster \u201ePakete\u201c zum Herunterladen \u00f6ffnen?"}
+    {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"F\u00fcr das gew\u00e4hlte Sprachenpaar ist kein Modell installiert. Das Fenster \u201ePakete\u201c zum Herunterladen \u00f6ffnen?"},
+    {L"Авто", L"Automatisch"},
 }};

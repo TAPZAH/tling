@@ -1,5 +1,5 @@
 // Французский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 150> kStringsFr{{
+constexpr std::array<Pair, 151> kStringsFr{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copier automatiquement le texte s\u00e9lectionn\u00e9 dans le presse-papiers"},
     {L"Автор: ", L"Auteur : "},
     {L"Версия: ", L"Version : "},
@@ -148,5 +148,6 @@ constexpr std::array<Pair, 150> kStringsFr{{
     {L"Запуск вместе с Windows включён", L"Lancement avec Windows activ\u00e9"},
     {L"Запуск вместе с Windows выключен", L"Lancement avec Windows d\u00e9sactiv\u00e9"},
     {L"Нет модели", L"Aucun mod\u00e8le"},
-    {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"Aucun mod\u00e8le n\u2019est install\u00e9 pour cette paire. Ouvrir la fen\u00eatre \u00ab Paquets \u00bb pour le t\u00e9l\u00e9charger ?"}
+    {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"Aucun mod\u00e8le n\u2019est install\u00e9 pour cette paire. Ouvrir la fen\u00eatre \u00ab Paquets \u00bb pour le t\u00e9l\u00e9charger ?"},
+    {L"Авто", L"Auto"},
 }};

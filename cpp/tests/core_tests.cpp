@@ -1050,6 +1050,41 @@ int main() {
         const auto missing = load_settings(settings_dir / "missing.json");
         require(missing.engine == "argos", "engine по умолчанию");
         require(missing.source_language == "en", "язык источника по умолчанию");
+        // Автоопределение языка источника: «Авто» хранится в настройках
+        // как обычный код и переживает сохранение.
+        {
+            auto auto_settings = missing;
+            auto_settings.source_language = "auto";
+            save_settings(path, auto_settings);
+            require(
+                load_settings(path).source_language == "auto",
+                "source_language=auto сохраняется");
+            // Определение языка по письму текста.
+            require(
+                detect_script_language("Привет, мир") == "ru",
+                "автоопределение: русский");
+            require(
+                detect_script_language("Добрий день, світе") == "uk",
+                "автоопределение: украинский");
+            require(
+                detect_script_language("Hello world") == "en",
+                "автоопределение: английский");
+            require(
+                detect_script_language("你好世界") == "zh",
+                "автоопределение: китайский");
+            require(
+                detect_script_language("こんにちは") == "ja",
+                "автоопределение: японский");
+            require(
+                detect_script_language("안녕하세요") == "ko",
+                "автоопределение: корейский");
+            require(
+                detect_script_language("مرحبا") == "ar",
+                "автоопределение: арабский");
+            require(
+                detect_script_language("12345 !!!").empty(),
+                "автоопределение: без букв пусто");
+        }
         require(missing.target_language == "ru", "язык перевода по умолчанию");
         require(missing.ui_theme == "light", "тема по умолчанию light");
         require(!missing.auto_copy_selection, "автокопирование по умолчанию выкл");

@@ -706,6 +706,36 @@ void select_language(HWND combo, const std::string& code, int fallback) {
         0);
 }
 
+// «С языка»: первым пунктом идёт «Авто» — язык определяется по тексту.
+constexpr std::string_view kAutoSourceLanguage = "auto";
+bool g_auto_source_language = false;
+
+int source_language_index(std::string_view code) {
+    if (code == kAutoSourceLanguage) {
+        return 0;
+    }
+    const int index = language_index(code);
+    return index >= 0 ? index + 1 : -1;
+}
+
+std::string selected_source_language(HWND combo) {
+    const LRESULT index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (index == 0) {
+        return std::string(kAutoSourceLanguage);
+    }
+    if (index < 0 ||
+        index > static_cast<LRESULT>(language_count())) {
+        throw std::runtime_error("Не выбран язык");
+    }
+    return offline_translator::supported_languages()[
+        static_cast<std::size_t>(index) - 1].code;
+}
+
+void select_source_language(HWND combo, const std::string& code) {
+    const int index = source_language_index(code);
+    SendMessageW(combo, CB_SETCURSEL, index >= 0 ? index : 0, 0);
+}
+
 void set_status(const std::wstring& text) {
     if (g_status_label) {
         const std::wstring shown = offline_translator::tr(text);
@@ -926,6 +956,12 @@ void post_status(HWND window, const std::string& text) {
 void fill_language_combos() {
     SendMessageW(g_source_language_combo, CB_RESETCONTENT, 0, 0);
     SendMessageW(g_target_language_combo, CB_RESETCONTENT, 0, 0);
+    // «Авто» только у языка источника, у цели автоопределение смысла не имеет.
+    SendMessageW(
+        g_source_language_combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Авто"));
     for (const auto& name : combo_language_names()) {
         SendMessageW(
             g_source_language_combo,
@@ -948,7 +984,9 @@ void apply_settings_to_ui(const offline_translator::AppSettings& settings) {
             offline_translator::engine_kind_from_settings(settings.engine)),
         0);
     fill_language_combos();
-    select_language(g_source_language_combo, settings.source_language, 0);
+    g_auto_source_language =
+        settings.source_language == kAutoSourceLanguage;
+    select_source_language(g_source_language_combo, settings.source_language);
     select_language(
         g_target_language_combo,
         settings.target_language,
@@ -968,7 +1006,9 @@ offline_translator::AppSettings current_settings(HWND window) {
         g_runtime ? g_runtime->settings : offline_translator::AppSettings{};
     settings.engine =
         offline_translator::settings_engine_name(selected_engine());
-    settings.source_language = selected_language(g_source_language_combo);
+    settings.source_language = g_auto_source_language
+        ? std::string(kAutoSourceLanguage)
+        : selected_source_language(g_source_language_combo);
     settings.target_language = selected_language(g_target_language_combo);
     collect_window_size(window, settings);
     return settings;
@@ -1067,11 +1107,21 @@ void start_translation(HWND window) {
     }
     const std::wstring source_text = control_text(g_source_edit);
     const auto engine_kind = selected_engine();
-    const std::string source_language = selected_language(
+    std::string source_language = selected_source_language(
         g_source_language_combo);
     const std::string target_language = selected_language(
         g_target_language_combo);
     const std::string text = to_utf8(source_text);
+    if (source_language == kAutoSourceLanguage) {
+        // Автоопределение: смотрим на письмо текста и переключаем список
+        // «С языка» на найденный язык (режим «Авто» при этом сохраняется).
+        const std::string detected =
+            offline_translator::detect_script_language(text);
+        source_language = detected.empty() ? "en" : detected;
+        select_source_language(g_source_language_combo, source_language);
+        offline_translator::app_log_info(
+            "автоопределение языка: " + source_language);
+    }
     offline_translator::app_log_info(
         "перевод окна старт chars=" + std::to_string(text.size()) + " " +
         source_language + "→" + target_language + " " + runtime_flags());
@@ -3950,8 +4000,9 @@ void apply_settings_dialog(HWND settings_window) {
         // selected_language() бросает исключение, если в комбобоксе нет
         // выбранного пункта, поэтому читать языки нужно внутри try.
         if (g_runtime->main_window && g_engine_combo) {
-            settings.source_language =
-                selected_language(g_source_language_combo);
+            settings.source_language = g_auto_source_language
+                ? std::string(kAutoSourceLanguage)
+                : selected_source_language(g_source_language_combo);
             settings.target_language =
                 selected_language(g_target_language_combo);
             collect_window_size(g_runtime->main_window, settings);
@@ -5891,6 +5942,11 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
              LOWORD(w_param) == kSourceLanguageCombo ||
              LOWORD(w_param) == kTargetLanguageCombo) &&
             HIWORD(w_param) == CBN_SELCHANGE) {
+            if (LOWORD(w_param) == kSourceLanguageCombo) {
+                g_auto_source_language =
+                    selected_source_language(g_source_language_combo) ==
+                    kAutoSourceLanguage;
+            }
             persist_settings(window);
             if (LOWORD(w_param) == kEngineCombo) {
                 switch (selected_engine()) {
