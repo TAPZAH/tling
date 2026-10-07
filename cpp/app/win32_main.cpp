@@ -66,6 +66,7 @@ constexpr UINT kPackageIndexMessage = WM_APP + 5;
 constexpr UINT kTrayMessage = WM_APP + 10;
 constexpr UINT kSelectionResultMessage = WM_APP + 11;
 constexpr UINT kRecoverInputMessage = WM_APP + 20;
+constexpr UINT kDropdownOpenedMessage = WM_APP + 24;
 constexpr UINT kUpdateCheckDoneMessage = WM_APP + 21;
 constexpr UINT kUpdateInstallDoneMessage = WM_APP + 22;
 constexpr UINT kSelectionPollTimer = 1;
@@ -5238,7 +5239,7 @@ void create_main_controls(HWND window) {
     g_engine_combo = CreateWindowW(
         L"COMBOBOX",
         nullptr,
-        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
         90,
         12,
         155,
@@ -5307,7 +5308,7 @@ void create_main_controls(HWND window) {
     g_source_language_combo = CreateWindowW(
         L"COMBOBOX",
         nullptr,
-        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
         90,
         48,
         150,
@@ -5331,7 +5332,7 @@ void create_main_controls(HWND window) {
     g_target_language_combo = CreateWindowW(
         L"COMBOBOX",
         nullptr,
-        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
         335,
         48,
         130,
@@ -6054,6 +6055,22 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
                 return 0;
             }
         }
+        if (message == kDropdownOpenedMessage) {
+            // Показываем список языков с первого пункта: иначе Windows
+            // прокручивает его к выбранному языку, и верхние пункты
+            // («Авто», «Английский») остаются скрытыми.
+            const int id = static_cast<int>(LOWORD(w_param));
+            HWND combo = nullptr;
+            if (id == kSourceLanguageCombo) {
+                combo = g_source_language_combo;
+            } else if (id == kTargetLanguageCombo) {
+                combo = g_target_language_combo;
+            }
+            if (combo) {
+                SendMessageW(combo, CB_SETTOPINDEX, 0, 0);
+            }
+            return 0;
+        }
         if (message == WM_COMMAND &&
             (LOWORD(w_param) == kSourceLanguageCombo ||
              LOWORD(w_param) == kTargetLanguageCombo) &&
@@ -6061,13 +6078,13 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             // Список языков длинный, а Windows прокручивает его к выбранному
             // пункту: «Авто» и первые языки оставались невидимыми. Показываем
             // список с начала.
-            if (l_param != 0) {
-                SendMessageW(
-                    reinterpret_cast<HWND>(l_param),
-                    CB_SETTOPINDEX,
-                    0,
-                    0);
-            }
+            // Список дорисовывается после этого уведомления, поэтому
+            // прокрутку к началу делаем отдельным сообщением.
+            PostMessageW(
+                window,
+                kDropdownOpenedMessage,
+                w_param,
+                l_param);
             return 0;
         }
         if (message == WM_COMMAND &&
