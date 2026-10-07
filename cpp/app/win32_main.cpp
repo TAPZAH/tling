@@ -44,6 +44,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <numeric>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -700,12 +701,31 @@ std::size_t language_count() {
     return offline_translator::supported_languages().size();
 }
 
+// Порядок отображения языков: по алфавиту русских названий, чтобы нужный
+// язык легко находился (в таблице коды идут по популярности).
+const std::vector<std::size_t>& language_display_order() {
+    static const std::vector<std::size_t> order = [] {
+        const auto& languages = offline_translator::supported_languages();
+        std::vector<std::size_t> result(languages.size());
+        std::iota(result.begin(), result.end(), std::size_t{0});
+        std::sort(
+            result.begin(),
+            result.end(),
+            [&languages](std::size_t left, std::size_t right) {
+                return languages[left].name < languages[right].name;
+            });
+        return result;
+    }();
+    return order;
+}
+
 const std::vector<std::wstring>& combo_language_names() {
     static const std::vector<std::wstring> names = [] {
+        const auto& languages = offline_translator::supported_languages();
         std::vector<std::wstring> result;
-        result.reserve(offline_translator::supported_languages().size());
-        for (const auto& entry : offline_translator::supported_languages()) {
-            result.push_back(from_utf8(entry.name));
+        result.reserve(languages.size());
+        for (const auto index : language_display_order()) {
+            result.push_back(from_utf8(languages[index].name));
         }
         return result;
     }();
@@ -714,9 +734,10 @@ const std::vector<std::wstring>& combo_language_names() {
 
 int language_index(std::string_view code) {
     const auto& languages = offline_translator::supported_languages();
-    for (std::size_t index = 0; index < languages.size(); ++index) {
-        if (languages[index].code == code) {
-            return static_cast<int>(index);
+    const auto& order = language_display_order();
+    for (std::size_t position = 0; position < order.size(); ++position) {
+        if (languages[order[position]].code == code) {
+            return static_cast<int>(position);
         }
     }
     return -1;
@@ -728,7 +749,7 @@ std::string selected_language(HWND combo) {
         throw std::runtime_error("Не выбран язык");
     }
     return offline_translator::supported_languages()[
-        static_cast<std::size_t>(index)].code;
+        language_display_order()[static_cast<std::size_t>(index)]].code;
 }
 
 offline_translator::EngineKind selected_engine() {
@@ -790,7 +811,7 @@ std::string selected_source_language(HWND combo) {
         throw std::runtime_error("Не выбран язык");
     }
     return offline_translator::supported_languages()[
-        static_cast<std::size_t>(index) - 1].code;
+        language_display_order()[static_cast<std::size_t>(index) - 1]].code;
 }
 
 void select_source_language(HWND combo, const std::string& code) {
@@ -6032,6 +6053,22 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
                 }
                 return 0;
             }
+        }
+        if (message == WM_COMMAND &&
+            (LOWORD(w_param) == kSourceLanguageCombo ||
+             LOWORD(w_param) == kTargetLanguageCombo) &&
+            HIWORD(w_param) == CBN_DROPDOWN) {
+            // Список языков длинный, а Windows прокручивает его к выбранному
+            // пункту: «Авто» и первые языки оставались невидимыми. Показываем
+            // список с начала.
+            if (l_param != 0) {
+                SendMessageW(
+                    reinterpret_cast<HWND>(l_param),
+                    CB_SETTOPINDEX,
+                    0,
+                    0);
+            }
+            return 0;
         }
         if (message == WM_COMMAND &&
             (LOWORD(w_param) == kEngineCombo ||
