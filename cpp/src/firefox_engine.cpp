@@ -277,7 +277,10 @@ std::string FirefoxEngine::translate_direct(
         translated.pop_back();
     }
     if (translated.empty()) {
-        throw std::runtime_error("Пустой ответ переводчика");
+        throw std::runtime_error(
+            "Пустой ответ переводчика для пары " +
+            std::string(source_code) + " → " + std::string(target_code) +
+            " (модель повреждена — переустановите её в окне «Пакеты»)");
     }
     return translated;
 }

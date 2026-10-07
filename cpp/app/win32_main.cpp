@@ -6183,6 +6183,31 @@ if (message == kTranslateMessage) {
                 direction.second);
             if (result->failed) {
                 set_status(L"Ошибка перевода выделения");
+                // Нет модели для пары — предлагаем скачать её в «Пакетах»
+                // (так же, как в главном окне).
+                const std::string failed_text = to_utf8(result->text);
+                if (failed_text.find(
+                        std::string(offline_translator::kMissingModelMarker)) !=
+                    std::string::npos) {
+                    const int answer = localized_message_box(
+                        window,
+                        L"Для выбранной пары нет установленной модели. "
+                        L"Открыть окно «Пакеты», чтобы скачать её?",
+                        L"Нет модели",
+                        MB_ICONQUESTION | MB_YESNO);
+                    if (answer == IDYES) {
+                        try {
+                            open_packages_window(
+                                window,
+                                window_instance(window),
+                                missing_model_filter(result->text));
+                        } catch (const std::exception& error) {
+                            offline_translator::app_log_error(
+                                std::string("не удалось открыть пакеты: ") +
+                                error.what());
+                        }
+                    }
+                }
             }
             return 0;
         }

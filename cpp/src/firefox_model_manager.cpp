@@ -447,16 +447,31 @@ FirefoxModelManager::FirefoxModelManager(
     }
 }
 
-bool firefox_model_ready(const std::filesystem::path& directory) {
+// Неполный пакет (например, после оборванной загрузки) не должен считаться
+// установленным: иначе движок загружает битую модель и выдаёт «пустой ответ».
+constexpr std::uintmax_t kMinFirefoxModelBytes = 1024 * 1024;
+constexpr std::uintmax_t kMinFirefoxVocabBytes = 1024;
+
+bool file_at_least(
+    const std::filesystem::path& path,
+    std::uintmax_t minimum) {
     std::error_code ignored;
-    const bool has_model =
-        std::filesystem::is_regular_file(directory / "model.bin", ignored);
+    if (!std::filesystem::is_regular_file(path, ignored)) {
+        return false;
+    }
+    return std::filesystem::file_size(path, ignored) >= minimum;
+}
+
+bool firefox_model_ready(const std::filesystem::path& directory) {
+    if (!file_at_least(directory / "model.bin", kMinFirefoxModelBytes)) {
+        return false;
+    }
     const bool shared_vocab =
-        std::filesystem::is_regular_file(directory / "vocab.spm", ignored);
+        file_at_least(directory / "vocab.spm", kMinFirefoxVocabBytes);
     const bool split_vocab =
-        std::filesystem::is_regular_file(directory / "srcvocab.spm", ignored) &&
-        std::filesystem::is_regular_file(directory / "trgvocab.spm", ignored);
-    return has_model && (shared_vocab || split_vocab);
+        file_at_least(directory / "srcvocab.spm", kMinFirefoxVocabBytes) &&
+        file_at_least(directory / "trgvocab.spm", kMinFirefoxVocabBytes);
+    return shared_vocab || split_vocab;
 }
 
 std::optional<std::filesystem::path> FirefoxModelManager::ready_model_in(

@@ -216,20 +216,32 @@ pub extern "C" fn fxt_detect_language(
                     .collect()
             })
             .unwrap_or_default();
-        let info = if allowed.is_empty() {
-            whatlang::detect(&text)
-        } else {
-            whatlang::Detector::with_allowlist(allowed).detect(&text)
-        };
-        let Some(info) = info else {
-            return String::new();
-        };
-        // Короткие фразы триграммный детектор угадывает случайно: пусть
-        // решение принимает определение по письму.
-        if info.confidence() < 0.10 {
-            return String::new();
+        // 1) Полный набор языков: уверенное определение используем как есть.
+        //    Так турецкий текст распознаётся даже без установленной модели, и
+        //    приложение предлагает её скачать.
+        if let Some(info) = whatlang::detect(&text) {
+            if info.confidence() >= 0.20 {
+                let code = iso639_1(info.lang());
+                if !code.is_empty() {
+                    return code.to_string();
+                }
+            }
         }
-        iso639_1(info.lang()).to_string()
+        // 2) Среди доступных языков: короткие фразы вроде «Guten Morgen»
+        //    полный набор путает (nb), а список установленных моделей — нет.
+        if !allowed.is_empty() {
+            if let Some(info) =
+                whatlang::Detector::with_allowlist(allowed).detect(&text)
+            {
+                if info.confidence() >= 0.10 {
+                    let code = iso639_1(info.lang());
+                    if !code.is_empty() {
+                        return code.to_string();
+                    }
+                }
+            }
+        }
+        String::new()
     });
     match outcome {
         Ok(code) => CString::new(code).unwrap_or_default().into_raw(),

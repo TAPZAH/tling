@@ -666,7 +666,17 @@ int main() {
                 offline_translator::detect_language_code(
                     "Hello, world", {"tr", "ru", "en"})
                     .empty(),
-                "детектор: короткая фраза не угадывается");
+                "детектор: слишком короткая фраза — решение за письмом");
+            require(
+                offline_translator::detect_language_code(
+                    "Hello, world", {"en", "ru"}) == "en",
+                "детектор: английская фраза по списку доступных");
+            // Турецкий без установленной модели: язык всё равно должен
+            // определиться, чтобы приложение предложило скачать модель.
+            require(
+                offline_translator::detect_language_code(
+                    "Merhaba, dünya! Nasılsın?", {"en", "ru"}) == "tr",
+                "детектор: турецкий без установленной модели");
         } else {
             std::cout << "language detector: fxbridge.dll не найден, пропуск\n";
         }
@@ -818,11 +828,15 @@ int main() {
         const auto root =
             std::filesystem::temp_directory_path() / "offline-translator-fx";
         std::filesystem::remove_all(root);
-        const auto write_ready_model = [](const std::filesystem::path& dir) {
-            std::filesystem::create_directories(dir);
-            fs_utils::write_text_file(dir / "model.bin", "model");
-            fs_utils::write_text_file(dir / "vocab.spm", "vocab");
-        };
+            const auto write_ready_model = [](const std::filesystem::path& dir) {
+                std::filesystem::create_directories(dir);
+                // Размер должен проходить проверку готовности модели
+                // (неполные файлы считаются повреждённым пакетом).
+                fs_utils::write_text_file(
+                    dir / "model.bin", std::string(1024 * 1024, 'm'));
+                fs_utils::write_text_file(
+                    dir / "vocab.spm", std::string(2 * 1024, 'v'));
+            };
         const auto base_pair = root / "base" / "en-ru";
         write_ready_model(base_pair);
         const auto tiny_staging = root / "_downloads" / "tiny-en-fr";
@@ -845,8 +859,25 @@ int main() {
 
         // Legacy-плоский каталог для tiny.
         write_ready_model(root / "uk-en");
-        offline_translator::FirefoxModelManager legacy(root, "tiny", "uk", "en");
-        require(legacy.is_installed(), "legacy-плоский каталог tiny находится");
+            offline_translator::FirefoxModelManager legacy(root, "tiny", "uk", "en");
+            require(legacy.is_installed(), "legacy-плоский каталог tiny находится");
+
+            // Оборванная загрузка: файлы есть, но модель битая по размеру —
+            // такой пакет не должен считаться установленным.
+            const auto truncated = root / "tiny" / "de-fr";
+            std::filesystem::create_directories(truncated);
+            fs_utils::write_text_file(truncated / "model.bin", "tiny");
+            fs_utils::write_text_file(
+                truncated / "vocab.spm", std::string(2 * 1024, 'v'));
+            offline_translator::FirefoxModelManager damaged(
+                root, "tiny", "de", "fr");
+            require(
+                !damaged.is_installed(),
+                "оборванная модель Firefox не считается установленной");
+            require(
+                damaged.has_incomplete_package(),
+                "оборванная модель Firefox помечается повреждённой");
+            std::filesystem::remove_all(truncated);
 
         const auto installed =
             offline_translator::FirefoxModelManager::installed_packages(root);
