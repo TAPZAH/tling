@@ -12,6 +12,7 @@
 #include "offline_translator/hotkey.hpp"
 #include "offline_translator/language_store.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
+#include "offline_translator/language_detect.hpp"
 #include "offline_translator/route_planner.hpp"
 #include "offline_translator/selection.hpp"
 #include "offline_translator/translation_application.hpp"
@@ -429,6 +430,67 @@ std::filesystem::path model_root_for_kind(
 std::wstring clipboard_text() {
     offline_translator::Win32Clipboard clipboard;
     return clipboard.get_text();
+}
+
+// Языки, осмысленные для выбранного движка: для парных движков — только
+// те, для которых есть модели; у NLLB одна многоязычная модель, поэтому
+// доступен весь список. Используется как ограничение для автоопределения,
+// чтобы короткая фраза не «угадывалась» как язык без моделей.
+std::vector<std::string> available_language_codes(
+    offline_translator::EngineKind engine_kind) {
+    std::vector<std::string> codes;
+    try {
+        if (engine_kind == offline_translator::EngineKind::nllb) {
+            for (const auto& entry : offline_translator::supported_languages()) {
+                codes.push_back(entry.code);
+            }
+            return codes;
+        }
+        const auto root = model_root_for_kind(engine_kind);
+        std::vector<offline_translator::PackageInfo> packages;
+        if (engine_kind == offline_translator::EngineKind::argos) {
+            packages =
+                offline_translator::ArgosModelManager::installed_packages(root);
+        } else if (engine_kind == offline_translator::EngineKind::firefox) {
+            packages = offline_translator::FirefoxModelManager::
+                           installed_packages(root);
+        } else if (engine_kind == offline_translator::EngineKind::marian) {
+            packages = offline_translator::MarianModelManager::
+                           installed_packages(root);
+        }
+        for (const auto& package : packages) {
+            if (!package.from_code.empty()) {
+                codes.push_back(package.from_code);
+            }
+            if (!package.to_code.empty()) {
+                codes.push_back(package.to_code);
+            }
+        }
+    } catch (const std::exception&) {
+    }
+    if (codes.empty()) {
+        for (const auto& entry : offline_translator::supported_languages()) {
+            codes.push_back(entry.code);
+        }
+    }
+    return codes;
+}
+
+// Автоопределение языка текста: сначала настоящий детектор (whatlang через
+// fxbridge), при неудаче — определение по письму.
+std::string detect_source_language(
+    const std::string& text,
+    offline_translator::EngineKind engine_kind) {
+    std::string detected = offline_translator::detect_language_code(
+        text,
+        available_language_codes(engine_kind));
+    if (detected.empty()) {
+        detected = offline_translator::detect_script_language(text);
+    }
+    if (detected.empty()) {
+        detected = "en";
+    }
+    return detected;
 }
 
 void hide_result_popup();
@@ -1113,11 +1175,10 @@ void start_translation(HWND window) {
         g_target_language_combo);
     const std::string text = to_utf8(source_text);
     if (source_language == kAutoSourceLanguage) {
-        // Автоопределение: смотрим на письмо текста и переключаем список
-        // «С языка» на найденный язык (режим «Авто» при этом сохраняется).
-        const std::string detected =
-            offline_translator::detect_script_language(text);
-        source_language = detected.empty() ? "en" : detected;
+        // Автоопределение: детектор по тексту (с ограничением по доступным
+        // языкам), при неудаче — по письму; список переключаем на найденный
+        // язык, режим «Авто» при этом сохраняется.
+        source_language = detect_source_language(text, engine_kind);
         select_source_language(g_source_language_combo, source_language);
         offline_translator::app_log_info(
             "автоопределение языка: " + source_language);
@@ -2954,15 +3015,15 @@ std::pair<std::string, std::string> selection_translation_direction(
         } catch (const std::exception&) {
         }
     }
-    auto direction =
-        offline_translator::choose_selection_direction(to_utf8(text));
-    if (direction.first == window_target) {
+    // «Авто»: определяем язык детектором, цель берём из главного окна.
+    const std::string source =
+        detect_source_language(to_utf8(text), selected_engine());
+    std::string target = window_target;
+    if (source == target) {
         // Направление совпало с целью: переводим в обратную сторону.
-        direction.second = direction.first == "en" ? "ru" : "en";
-    } else {
-        direction.second = window_target;
+        target = source == "en" ? "ru" : "en";
     }
-    return direction;
+    return {source, target};
 }
 
 void start_selection_translation(HWND main_window) {

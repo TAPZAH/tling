@@ -8,6 +8,7 @@
 #include "offline_translator/clipboard_history.hpp"
 #include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
+#include "offline_translator/language_detect.hpp"
 #include "offline_translator/language_store.hpp"
 #include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/nllb_language.hpp"
@@ -640,6 +641,34 @@ int main() {
             require(
                 language_store_name(code) != code,
                 std::string("язык Argos есть в списке: ") + code);
+        }
+
+        // Определение языка: настоящий детектор (whatlang через fxbridge),
+        // ограниченный списком доступных языков.
+        if (offline_translator::language_detector_available()) {
+            require(
+                offline_translator::detect_language_code(
+                    "Merhaba, dünya! Nasılsın?", {"tr", "ru", "en"}) == "tr",
+                "детектор: турецкий");
+            require(
+                offline_translator::detect_language_code(
+                    "Guten Morgen", {"de", "en", "ru"}) == "de",
+                "детектор: немецкий по списку доступных");
+            require(
+                offline_translator::detect_language_code(
+                    "Привет, мир", {"ru", "en"}) == "ru",
+                "детектор: русский");
+            require(
+                offline_translator::detect_language_code(
+                    "Bonjour le monde", {"fr", "en"}) == "fr",
+                "детектор: французский");
+            require(
+                offline_translator::detect_language_code(
+                    "Hello, world", {"tr", "ru", "en"})
+                    .empty(),
+                "детектор: короткая фраза не угадывается");
+        } else {
+            std::cout << "language detector: fxbridge.dll не найден, пропуск\n";
         }
 
         PackageInfo en_ru;

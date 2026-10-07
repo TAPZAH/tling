@@ -96,6 +96,7 @@ add_library(offline_translator_core
     src/fs_utils.cpp
     src/hotkey.cpp
     src/language_store.cpp
+    src/language_detect.cpp
     src/marian_engine.cpp
     src/marian_model_manager.cpp
     src/nllb_model_manager.cpp
@@ -421,6 +422,16 @@ target_link_libraries(core_tests PRIVATE offline_translator_core ZLIB::ZLIB zstd
 target_link_libraries(integration_tests PRIVATE offline_translator_core)
 target_include_directories(core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# Тесты определения языка используют Rust-мост, поэтому fxbridge.dll нужен
+# и рядом с core_tests.
+if (WIN32 AND EXISTS "${_fxbridge_dll}")
+    add_custom_command(TARGET core_tests POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_fxbridge_dll}"
+            "$<TARGET_FILE_DIR:core_tests>/fxbridge.dll"
+        COMMENT "Копирование fxbridge.dll рядом с core_tests"
+    )
+endif()
 if (MSVC)
     target_compile_options(core_tests PRIVATE /EHsc /permissive- /utf-8)
     target_compile_options(integration_tests PRIVATE /EHsc /permissive- /utf-8)
