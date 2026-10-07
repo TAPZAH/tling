@@ -12,6 +12,7 @@
 #include "offline_translator/hotkey.hpp"
 #include "offline_translator/language_store.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
+#include "offline_translator/route_planner.hpp"
 #include "offline_translator/selection.hpp"
 #include "offline_translator/translation_application.hpp"
 #include "offline_translator/window_policy.hpp"
@@ -5090,7 +5091,7 @@ void create_main_controls(HWND window) {
         90,
         48,
         150,
-        140,
+        420,
         window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSourceLanguageCombo)),
         nullptr,
@@ -5114,7 +5115,7 @@ void create_main_controls(HWND window) {
         335,
         48,
         130,
-        140,
+        420,
         window,
         reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(kTargetLanguageCombo)),
@@ -5857,13 +5858,36 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             }
             return 0;
         }
-        if (message == kTranslateMessage) {
+if (message == kTranslateMessage) {
             std::unique_ptr<StatusPayload> result(
                 reinterpret_cast<StatusPayload*>(l_param));
             SetWindowTextW(g_result_edit, result->text.c_str());
             set_main_busy(false);
             if (result->failed) {
-                set_status(L"Ошибка. Можно повторить перевод.");
+                set_status(L"Ошибка. Смотрите результат перевода.");
+                // Нет установленной модели для пары: предлагаем скачать её
+                // в окне «Пакеты» (маркер ставит route_planner).
+                const std::string failed_text = to_utf8(result->text);
+                if (failed_text.find(
+                        std::string(offline_translator::kMissingModelMarker)) !=
+                    std::string::npos) {
+                    const int answer = localized_message_box(
+                        window,
+                        L"Для выбранной пары нет установленной модели.\n\n"
+                        L"Открыть окно «Пакеты», чтобы скачать её?",
+                        L"Нет модели",
+                        MB_ICONQUESTION | MB_YESNO);
+                    if (answer == IDYES) {
+                        try {
+                            open_packages_window(
+                                window, window_instance(window));
+                        } catch (const std::exception& error) {
+                            offline_translator::app_log_error(
+                                std::string("не удалось открыть пакеты: ") +
+                                error.what());
+                        }
+                    }
+                }
             }
             return 0;
         }

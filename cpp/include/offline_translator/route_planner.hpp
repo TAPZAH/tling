@@ -9,6 +9,10 @@
 
 namespace offline_translator {
 
+// Маркер в тексте ошибки: для пары нет установленной модели. По нему
+// интерфейс предлагает открыть окно «Пакеты» и скачать её.
+inline constexpr std::string_view kMissingModelMarker = "Установите:";
+
 std::optional<std::string> english_pivot_route(
     const IsInstalled& is_installed,
     std::string_view source_code,

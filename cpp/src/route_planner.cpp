@@ -108,7 +108,7 @@ TranslationResult translate_with_english_pivot(
     if (!missing.empty()) {
         std::string message =
             "Нет модели " + prefix + pair_name(source_code, target_code) +
-            ". Установите: ";
+            ". " + std::string(kMissingModelMarker) + " ";
         for (std::size_t index = 0; index < missing.size(); ++index) {
             if (index != 0) {
                 message += ", ";
