@@ -1,5 +1,5 @@
 // Английский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 148> kStringsEn{{
+constexpr std::array<Pair, 150> kStringsEn{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Automatically copy the selected text to the clipboard"},
     {L"Автор: ", L"Author: "},
     {L"Версия: ", L"Version: "},
@@ -146,5 +146,7 @@ constexpr std::array<Pair, 148> kStringsEn{{
     {L"Окно результата: можно выделить текст, закрыть кнопкой", L"Result window: text can be selected, close with the button"},
     {L"Окно результата: закрывается нажатием по окну", L"Result window: closes when clicked"},
     {L"Запуск вместе с Windows включён", L"Launch with Windows is on"},
-    {L"Запуск вместе с Windows выключен", L"Launch with Windows is off"}
+    {L"Запуск вместе с Windows выключен", L"Launch with Windows is off"},
+    {L"Нет модели", L"No model"},
+    {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"There is no installed model for the selected pair. Open the Packages window to download it?"}
 }};

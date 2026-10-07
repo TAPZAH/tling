@@ -145,6 +145,7 @@ HWND g_package_install = nullptr;
 HWND g_package_uninstall = nullptr;
 HWND g_package_status = nullptr;
 HWND g_package_search = nullptr;
+std::wstring g_pending_package_filter;
 HWND g_packages_parent = nullptr;
 HWND g_package_arch_caption = nullptr;
 HWND g_package_caption = nullptr;
@@ -3258,7 +3259,58 @@ void start_update_check();
 void start_update_install();
 void open_releases_page();
 void open_settings_window(HWND parent, HINSTANCE instance, bool check_updates = false);
-void open_packages_window(HWND parent, HINSTANCE instance);
+// Из сообщения «… Установите: tr->en» достаём язык, для которого нужно
+// скачать модель: у пары en->ru это ru, у пары tr->en — tr. Именно на нём
+// фильтруется список пакетов.
+std::wstring missing_model_filter(const std::wstring& error_text) {
+    const std::wstring marker =
+        from_utf8(std::string(offline_translator::kMissingModelMarker));
+    const auto marker_pos = error_text.find(marker);
+    if (marker_pos == std::wstring::npos) {
+        return {};
+    }
+    const std::wstring tail =
+        error_text.substr(marker_pos + marker.size());
+    const auto arrow = tail.find(L"->");
+    if (arrow == std::wstring::npos || arrow == 0) {
+        return {};
+    }
+    std::size_t start = arrow;
+    while (start > 0) {
+        const wchar_t ch = tail[start - 1];
+        if ((ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') ||
+            (ch >= L'0' && ch <= L'9')) {
+            --start;
+        } else {
+            break;
+        }
+    }
+    if (start == arrow) {
+        return {};
+    }
+    const std::wstring source_code = tail.substr(start, arrow - start);
+    std::size_t end = arrow + 2;
+    while (end < tail.size()) {
+        const wchar_t ch = tail[end];
+        if ((ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') ||
+            (ch >= L'0' && ch <= L'9')) {
+            ++end;
+        } else {
+            break;
+        }
+    }
+    const std::wstring target_code = tail.substr(arrow + 2, end - arrow - 2);
+    // Английский — лишь промежуточная ступень, фильтруем по другому языку.
+    if (!source_code.empty() && source_code != L"en") {
+        return source_code;
+    }
+    return target_code;
+}
+
+void open_packages_window(
+    HWND parent,
+    HINSTANCE instance,
+    const std::wstring& language_filter = std::wstring{});
 
 // Окно настроек: слева сайдбар со страницами (Языки/Поведение/Темы/
 // О программе), справа панель содержимого с вертикальным ползунком.
@@ -5358,6 +5410,17 @@ LRESULT CALLBACK packages_proc(
                 nullptr,
                 nullptr);
             refresh_package_list();
+            if (!g_pending_package_filter.empty()) {
+                SetWindowTextW(
+                    g_package_search,
+                    g_pending_package_filter.c_str());
+                offline_translator::app_log_info(
+                    "пакеты: фильтр по языку " +
+                    to_utf8(g_pending_package_filter) +
+                    " " + runtime_flags());
+                g_pending_package_filter.clear();
+                apply_package_filter();
+            }
             apply_theme_to_window(window);
             localize_window(window);
             std::thread([window]() {
@@ -5507,11 +5570,20 @@ LRESULT CALLBACK packages_proc(
     return DefWindowProcW(window, message, w_param, l_param);
 }
 
-void open_packages_window(HWND parent, HINSTANCE instance) {
+void open_packages_window(
+    HWND parent,
+    HINSTANCE instance,
+    const std::wstring& language_filter) {
     if (g_runtime && g_runtime->packages_window) {
         SetForegroundWindow(g_runtime->packages_window);
+        // Окно уже открыто: применяем фильтр к существующему списку.
+        if (!language_filter.empty() && g_package_search) {
+            SetWindowTextW(g_package_search, language_filter.c_str());
+            apply_package_filter();
+        }
         return;
     }
+    g_pending_package_filter = language_filter;
     HWND packages = CreateWindowW(
         L"TLingPackages",
         L"Пакеты моделей",
@@ -5873,14 +5945,16 @@ if (message == kTranslateMessage) {
                     std::string::npos) {
                     const int answer = localized_message_box(
                         window,
-                        L"Для выбранной пары нет установленной модели.\n\n"
+                        L"Для выбранной пары нет установленной модели. "
                         L"Открыть окно «Пакеты», чтобы скачать её?",
                         L"Нет модели",
                         MB_ICONQUESTION | MB_YESNO);
                     if (answer == IDYES) {
                         try {
                             open_packages_window(
-                                window, window_instance(window));
+                                window,
+                                window_instance(window),
+                                missing_model_filter(result->text));
                         } catch (const std::exception& error) {
                             offline_translator::app_log_error(
                                 std::string("не удалось открыть пакеты: ") +

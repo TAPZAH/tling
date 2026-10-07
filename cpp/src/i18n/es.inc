@@ -1,5 +1,5 @@
 // Испанский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 148> kStringsEs{{
+constexpr std::array<Pair, 150> kStringsEs{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copiar autom\u00e1ticamente el texto seleccionado al portapapeles"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Versi\u00f3n: "},
@@ -146,5 +146,7 @@ constexpr std::array<Pair, 148> kStringsEs{{
     {L"Окно результата: можно выделить текст, закрыть кнопкой", L"Ventana de resultado: se puede seleccionar el texto y cerrar con el bot\u00f3n"},
     {L"Окно результата: закрывается нажатием по окну", L"Ventana de resultado: se cierra al hacer clic"},
     {L"Запуск вместе с Windows включён", L"Inicio con Windows activado"},
-    {L"Запуск вместе с Windows выключен", L"Inicio con Windows desactivado"}
+    {L"Запуск вместе с Windows выключен", L"Inicio con Windows desactivado"},
+    {L"Нет модели", L"Sin modelo"},
+    {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"No hay ning\u00fan modelo instalado para este par. \u00bfAbrir la ventana \u00abPaquetes\u00bb para descargarlo?"}
 }};
