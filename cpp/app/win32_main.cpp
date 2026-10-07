@@ -2788,8 +2788,8 @@ void show_result_popup(
     }
 
     const std::wstring header = from_utf8(
-        offline_translator::language_display_name(source_code) + " → " +
-        offline_translator::language_display_name(target_code));
+        offline_translator::language_store_name(source_code) + " → " +
+        offline_translator::language_store_name(target_code));
     g_popup_header = CreateWindowW(
         L"STATIC",
         header.c_str(),
@@ -2930,6 +2930,41 @@ void show_result_popup(
     }
 }
 
+// Направление перевода выделенного текста. Если в главном окне язык
+// выбран вручную (не «Авто»), переводим именно с него и на выбранный
+// язык — раньше выбор пользователя игнорировался и по латинице всегда
+// угадывался английский. В режиме «Авто» язык определяется по письму,
+// а цель берётся из главного окна.
+std::pair<std::string, std::string> selection_translation_direction(
+    const std::wstring& text) {
+    std::string window_target = "ru";
+    try {
+        if (g_target_language_combo) {
+            window_target = selected_language(g_target_language_combo);
+        }
+    } catch (const std::exception&) {
+    }
+    if (!g_auto_source_language && g_source_language_combo) {
+        try {
+            const std::string source =
+                selected_source_language(g_source_language_combo);
+            if (!source.empty() && source != kAutoSourceLanguage) {
+                return {source, window_target};
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    auto direction =
+        offline_translator::choose_selection_direction(to_utf8(text));
+    if (direction.first == window_target) {
+        // Направление совпало с целью: переводим в обратную сторону.
+        direction.second = direction.first == "en" ? "ru" : "en";
+    } else {
+        direction.second = window_target;
+    }
+    return direction;
+}
+
 void start_selection_translation(HWND main_window) {
     if (!g_runtime || g_runtime->selection_busy.exchange(true)) {
         offline_translator::app_log_warn(
@@ -2947,7 +2982,7 @@ void start_selection_translation(HWND main_window) {
         return;
     }
     const std::string text = to_utf8(selected);
-    const auto direction = offline_translator::choose_selection_direction(text);
+    const auto direction = selection_translation_direction(selected);
     offline_translator::app_log_info(
         "перевод выделения старт chars=" + std::to_string(text.size()) + " " +
         direction.first + "→" + direction.second + " " + runtime_flags());
@@ -6024,8 +6059,8 @@ if (message == kTranslateMessage) {
         if (message == kSelectionResultMessage) {
             std::unique_ptr<StatusPayload> result(
                 reinterpret_cast<StatusPayload*>(l_param));
-            const auto direction = offline_translator::choose_selection_direction(
-                to_utf8(g_selection.selected_text));
+            const auto direction = selection_translation_direction(
+                g_selection.selected_text);
             show_result_popup(
                 window,
                 result->text,
