@@ -1,12 +1,8 @@
-﻿# TLing — оффлайн-переводчик для Windows
+﻿# TLing — переводчик для Windows
 
-**TLing** — настольный переводчик, который работает **без интернета** и без
-облачных сервисов: все модели выполняются локально на CPU. Windows 10/11
-(x64), установщик или портативная папка. Версия **beta 0.99.7**, автор —
-**TAP3AH**.
+**TLing** — настольный переводчик для Windows 10/11 (x64): **четыре офлайн-движка** работают полностью локально на CPU, без интернета, плюс дополнительно **онлайн-перевод Google** (по желанию, без ключа или со своим ключом). Установщик или портативная папка. Версия **beta 0.99.7**, автор — **TAP3AH**.
 
-**TLing** is an offline translator for Windows 10/11 (x64). Everything runs
-locally on CPU — no internet, no API keys, no telemetry. Version **beta 0.99.7**.
+**TLing** is a translator for Windows 10/11 (x64): four offline engines run locally on CPU with no internet, no API keys and no telemetry, plus an optional online Google engine. Version **beta 0.99.7**.
 
 ---
 
