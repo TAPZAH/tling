@@ -417,6 +417,19 @@ int main() {
                 "Привет",
             "разбор ответа Google gtx");
         require(
+            offline_translator::build_google_clients5_url(
+                "tr", "ru", "Merhaba dünya")
+                    .find("clients5.google.com") != std::string::npos,
+            "Google URL: запасной эндпоинт clients5");
+        require(
+            offline_translator::parse_google_clients5_translation(
+                "[\"Привет, мир\"]") == "Привет, мир",
+            "разбор ответа clients5 без автоопределения");
+        require(
+            offline_translator::parse_google_clients5_translation(
+                "[[\"Привет, мир\",\"en\"]]") == "Привет, мир",
+            "разбор ответа clients5 с автоопределением");
+        require(
             offline_translator::parse_yandex_translation(
                 "{\"code\":200,\"text\":[\"Привет\"]}") == "Привет",
             "разбор ответа Яндекса");
@@ -1340,6 +1353,27 @@ int main() {
         require(
             !load_settings(path).turbo_translation,
             "turbo_translation выключается обратно");
+        // Онлайн-движки и их ключи переживают сохранение.
+        loaded.engine = "google";
+        loaded.google_api_key = "G-KEY";
+        loaded.yandex_api_key = "Y-KEY";
+        save_settings(path, loaded);
+        {
+            const auto online = load_settings(path);
+            require(online.engine == "google", "engine=google сохраняется");
+            require(
+                online.google_api_key == "G-KEY",
+                "ключ Google сохраняется");
+            require(
+                online.yandex_api_key == "Y-KEY",
+                "ключ Яндекса сохраняется");
+        }
+        loaded.engine = "yandex";
+        save_settings(path, loaded);
+        require(
+            load_settings(path).engine == "yandex",
+            "engine=yandex сохраняется");
+        loaded.engine = "argos";
         require(
             copy_roundtrip.clipboard_history_limit == 7,
             "clipboard_history_limit сохраняется");

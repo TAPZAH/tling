@@ -336,6 +336,45 @@ std::string parse_google_translation(std::string_view json_text) {
     throw std::runtime_error("Google вернул пустой перевод");
 }
 
+std::string build_google_clients5_url(
+    std::string_view source_code,
+    std::string_view target_code,
+    std::string_view text) {
+    const std::string source =
+        online_language_code(OnlineProvider::google, source_code);
+    const std::string target =
+        online_language_code(OnlineProvider::google, target_code);
+    return "https://clients5.google.com/translate_a/t"
+           "?client=dict-chrome-ex&sl=" +
+        url_encode(source) + "&tl=" + url_encode(target) + "&q=" +
+        online_text(text);
+}
+
+std::string parse_google_clients5_translation(std::string_view json_text) {
+    if (json_text.empty() || json_text.front() != '[') {
+        throw std::runtime_error(
+            "Google (clients5) вернул неожиданный ответ");
+    }
+    json parsed;
+    try {
+        parsed = json::parse(json_text);
+    } catch (const std::exception&) {
+        throw std::runtime_error("Не удалось разобрать ответ Google");
+    }
+    if (!parsed.is_array() || parsed.empty()) {
+        throw std::runtime_error("Google вернул пустой перевод");
+    }
+    // Форма ответа: ["перевод"] или [["перевод","код-языка"]].
+    const auto& first = parsed[0];
+    if (first.is_string()) {
+        return first.get<std::string>();
+    }
+    if (first.is_array() && !first.empty() && first[0].is_string()) {
+        return first[0].get<std::string>();
+    }
+    throw std::runtime_error("Google вернул пустой перевод");
+}
+
 std::string parse_yandex_translation(std::string_view json_text) {
     if (json_text.empty() || json_text.front() != '{') {
         throw std::runtime_error("Яндекс вернул неожиданный ответ");
@@ -383,6 +422,35 @@ TranslationResult OnlineEngine::translate(
             "Для Яндекс.Переводчика нужен API-ключ: получите его на "
             "yandex.ru/dev/translate и укажите в настройках на странице "
             "«Языки»");
+    }
+    if (provider_ == OnlineProvider::google && api_key_.empty()) {
+        // Бесплатные эндпоинты: основной gtx и запасной clients5 (реже
+        // попадает под ограничение автоматических запросов).
+        std::string first_error;
+        for (const bool use_clients5 : {false, true}) {
+            const std::string url = use_clients5
+                ? build_google_clients5_url(source_code, target_code, text)
+                : build_google_translate_url(
+                      source_code, target_code, text, api_key_);
+            try {
+                app_log_info(
+                    "онлайн-перевод Google " +
+                    std::string(use_clients5 ? "(clients5)" : "(gtx)"));
+                const std::string body = http_get_text(url);
+                const std::string translated = use_clients5
+                    ? parse_google_clients5_translation(body)
+                    : parse_google_translation(body);
+                if (!translated.empty()) {
+                    return {translated, std::nullopt, std::nullopt};
+                }
+                first_error = "Google вернул пустой перевод";
+            } catch (const std::exception& error) {
+                if (first_error.empty()) {
+                    first_error = error.what();
+                }
+            }
+        }
+        throw std::runtime_error(first_error);
     }
     const std::string url =
         provider_ == OnlineProvider::google

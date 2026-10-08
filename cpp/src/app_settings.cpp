@@ -97,7 +97,7 @@ bool read_bool(const nlohmann::json& data, const char* key, bool fallback) {
 std::string read_engine(const nlohmann::json& data) {
     const auto engine = read_string(data, "engine", "argos");
     if (engine == "nllb" || engine == "argos" || engine == "firefox" ||
-        engine == "marian") {
+        engine == "marian" || engine == "google" || engine == "yandex") {
         return engine;
     }
     return "argos";

@@ -45,12 +45,19 @@ std::string build_google_translate_url(
     std::string_view target_code,
     std::string_view text,
     std::string_view api_key);
+// Запасной бесплатный эндпоинт Google (client=dict-chrome-ex): формат
+// ответа отличается от gtx, но он реже попадает под ограничения.
+std::string build_google_clients5_url(
+    std::string_view source_code,
+    std::string_view target_code,
+    std::string_view text);
 std::string build_yandex_translate_url(
     std::string_view source_code,
     std::string_view target_code,
     std::string_view text,
     std::string_view api_key);
 std::string parse_google_translation(std::string_view json_text);
+std::string parse_google_clients5_translation(std::string_view json_text);
 std::string parse_yandex_translation(std::string_view json_text);
 
 }  // namespace offline_translator
