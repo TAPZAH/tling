@@ -27,9 +27,7 @@ public:
           models_root(std::move(root)),
           engine_variant(std::move(variant)),
           online_api_key(std::move(api_key)) {
-        const bool online =
-            engine_kind == EngineKind::google ||
-            engine_kind == EngineKind::yandex;
+        const bool online = engine_kind == EngineKind::google;
         if (models_root.empty() && !online) {
             throw std::invalid_argument("Не задан корень моделей");
         }
@@ -46,17 +44,13 @@ public:
         } else if (engine_kind == EngineKind::google) {
             engine = std::make_unique<OnlineEngine>(
                 OnlineProvider::google, online_api_key);
-        } else if (engine_kind == EngineKind::yandex) {
-            engine = std::make_unique<OnlineEngine>(
-                OnlineProvider::yandex, online_api_key);
         } else {
             throw std::invalid_argument("Неизвестный тип движка");
         }
 
         service = std::make_unique<TranslationService>(
             [this](std::string_view source, std::string_view target) {
-                if (engine_kind == EngineKind::google ||
-                    engine_kind == EngineKind::yandex) {
+                if (engine_kind == EngineKind::google) {
                     // Онлайн-сервису модели не нужны.
                     return true;
                 }
@@ -225,9 +219,6 @@ std::string TranslationApplication::engine_name(EngineKind engine_kind) {
         }
         if (engine_kind == EngineKind::google) {
             return "Google";
-        }
-        if (engine_kind == EngineKind::yandex) {
-            return "Яндекс";
         }
         throw std::invalid_argument("Неизвестный тип движка");
     }

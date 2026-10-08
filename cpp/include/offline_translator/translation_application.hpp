@@ -15,7 +15,6 @@ enum class EngineKind {
     firefox,
     marian,
     google,
-    yandex,
 };
 
 class TranslationApplication {

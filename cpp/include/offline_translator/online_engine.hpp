@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "offline_translator/translation_engine.hpp"
 
@@ -7,11 +7,10 @@
 
 namespace offline_translator {
 
-enum class OnlineProvider { google, yandex };
+enum class OnlineProvider { google };
 
-// Онлайн-перевод через сервисы Google и Яндекс. Ключ API не обязателен для
-// Google (есть запасной бесплатный эндпоинт) и обязателен для Яндекса:
-// без ключа сервис отвечает «Invalid parameter: key».
+// Онлайн-перевод через Google. Ключ API не обязателен: без него
+// используются бесплатные эндпоинты (gtx и запасной clients5).
 class OnlineEngine : public TranslationEngine {
 public:
     OnlineEngine(OnlineProvider provider, std::string api_key);
@@ -51,13 +50,7 @@ std::string build_google_clients5_url(
     std::string_view source_code,
     std::string_view target_code,
     std::string_view text);
-std::string build_yandex_translate_url(
-    std::string_view source_code,
-    std::string_view target_code,
-    std::string_view text,
-    std::string_view api_key);
 std::string parse_google_translation(std::string_view json_text);
 std::string parse_google_clients5_translation(std::string_view json_text);
-std::string parse_yandex_translation(std::string_view json_text);
 
 }  // namespace offline_translator

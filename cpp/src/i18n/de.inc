@@ -1,5 +1,5 @@
 // Немецкий словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 161> kStringsDe{{
+constexpr std::array<Pair, 158> kStringsDe{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Ausgew\u00e4hlten Text automatisch in die Zwischenablage kopieren"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Version: "},
@@ -150,14 +150,11 @@ constexpr std::array<Pair, 161> kStringsDe{{
     {L"Нет модели", L"Kein Modell"},
     {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"F\u00fcr das gew\u00e4hlte Sprachenpaar ist kein Modell installiert. Das Fenster \u201ePakete\u201c zum Herunterladen \u00f6ffnen?"},
     {L"Авто", L"Automatisch"},
-    {L"Онлайн-перевод (Google и Яндекс)", L"Online-\u00dcbersetzung (Google und Yandex)"},
+    {L"Онлайн-перевод (Google)", L"Online-\u00dcbersetzung (Google)"},
     {L"Ключ Google (необязательно, для надёжности):", L"Google-Schl\u00fcssel (optional, f\u00fcr Zuverl\u00e4ssigkeit):"},
-    {L"Ключ Яндекс.Переводчика (обязателен):", L"Yandex.Translate-Schl\u00fcssel (erforderlich):"},
-    {L"Ключи хранятся в settings.json и передаются только выбранному сервису. Google переводит и без ключа, но сервис может ограничивать автоматические запросы; ключ Яндекса — на yandex.ru/dev/translate.", L"Die Schl\u00fcssel werden in settings.json gespeichert und nur an den gew\u00e4hlten Dienst gesendet. Google \u00fcbersetzt auch ohne Schl\u00fcssel, kann aber automatische Anfragen drosseln; den Yandex-Schl\u00fcssel gibt es unter yandex.ru/dev/translate."},
+    {L"Ключ хранится в settings.json и передаётся только сервису Google. Без ключа перевод идёт через бесплатные эндпоинты, но сервис может ограничивать автоматические запросы.", L"Der Schlüssel wird in settings.json gespeichert und nur an Google gesendet. Ohne Schlüssel läuft die Übersetzung über kostenlose Endpunkte, aber der Dienst kann automatische Anfragen drosseln."},
     {L"Онлайн-переводчику модели не нужны — перевод идёт через интернет.", L"Der Online-\u00dcbersetzer braucht keine Modelle — die \u00dcbersetzung l\u00e4uft \u00fcber das Internet."},
     {L"Google (онлайн)", L"Google (online)"},
-    {L"Яндекс (онлайн)", L"Yandex (online)"},
     {L"Онлайн-перевод — модели не нужны:", L"Online-\u00dcbersetzung — keine Modelle n\u00f6tig:"},
     {L"Google (онлайн). Нужен интернет; текст уходит на сервис Google.", L"Google (online). Internet erforderlich; der Text geht an Google."},
-    {L"Яндекс (онлайн). Нужен интернет и API-ключ в настройках.", L"Yandex (online). Internet und ein API-Schl\u00fcssel in den Einstellungen erforderlich."}
 }};

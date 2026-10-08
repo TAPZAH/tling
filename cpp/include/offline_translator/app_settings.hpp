@@ -39,7 +39,6 @@ struct AppSettings {
     bool turbo_translation{false};
     // Ключи онлайн-переводчиков (пусто — не задан).
     std::string google_api_key;
-    std::string yandex_api_key;
     int clipboard_history_limit{10};
 };
 

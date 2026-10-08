@@ -97,7 +97,7 @@ bool read_bool(const nlohmann::json& data, const char* key, bool fallback) {
 std::string read_engine(const nlohmann::json& data) {
     const auto engine = read_string(data, "engine", "argos");
     if (engine == "nllb" || engine == "argos" || engine == "firefox" ||
-        engine == "marian" || engine == "google" || engine == "yandex") {
+        engine == "marian" || engine == "google") {
         return engine;
     }
     return "argos";
@@ -230,8 +230,6 @@ AppSettings load_settings(const std::filesystem::path& path) {
             read_bool(data, "turbo_translation", false);
         settings.google_api_key =
             read_string(data, "google_api_key", std::string{});
-        settings.yandex_api_key =
-            read_string(data, "yandex_api_key", std::string{});
         settings.clipboard_history_limit = normalize_clipboard_history_limit(
             read_int(
                 data,
@@ -281,7 +279,6 @@ void save_settings(
     data["auto_copy_selection"] = settings.auto_copy_selection;
     data["turbo_translation"] = settings.turbo_translation;
     data["google_api_key"] = settings.google_api_key;
-    data["yandex_api_key"] = settings.yandex_api_key;
     data["clipboard_history_limit"] =
         normalize_clipboard_history_limit(settings.clipboard_history_limit);
     fs_utils::write_text_file(path, data.dump(2) + "\n");
@@ -299,9 +296,6 @@ EngineKind engine_kind_from_settings(std::string_view engine) {
     }
     if (engine == "google") {
         return EngineKind::google;
-    }
-    if (engine == "yandex") {
-        return EngineKind::yandex;
     }
     return EngineKind::argos;
 }
@@ -328,9 +322,6 @@ std::string settings_engine_name(EngineKind engine_kind) {
     }
     if (engine_kind == EngineKind::google) {
         return "google";
-    }
-    if (engine_kind == EngineKind::yandex) {
-        return "yandex";
     }
     throw std::invalid_argument("Неизвестный тип движка");
 }

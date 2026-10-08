@@ -1,5 +1,5 @@
 // Испанский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 161> kStringsEs{{
+constexpr std::array<Pair, 158> kStringsEs{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copiar autom\u00e1ticamente el texto seleccionado al portapapeles"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Versi\u00f3n: "},
@@ -150,14 +150,11 @@ constexpr std::array<Pair, 161> kStringsEs{{
     {L"Нет модели", L"Sin modelo"},
     {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"No hay ning\u00fan modelo instalado para este par. \u00bfAbrir la ventana \u00abPaquetes\u00bb para descargarlo?"},
     {L"Авто", L"Autom\u00e1tico"},
-    {L"Онлайн-перевод (Google и Яндекс)", L"Traducci\u00f3n en l\u00ednea (Google y Yandex)"},
+    {L"Онлайн-перевод (Google)", L"Traducci\u00f3n en l\u00ednea (Google)"},
     {L"Ключ Google (необязательно, для надёжности):", L"Clave de Google (opcional, para mayor fiabilidad):"},
-    {L"Ключ Яндекс.Переводчика (обязателен):", L"Clave de Yandex.Translate (obligatoria):"},
-    {L"Ключи хранятся в settings.json и передаются только выбранному сервису. Google переводит и без ключа, но сервис может ограничивать автоматические запросы; ключ Яндекса — на yandex.ru/dev/translate.", L"Las claves se guardan en settings.json y se env\u00edan solo al servicio elegido. Google tambi\u00e9n traduce sin clave, pero el servicio puede limitar las solicitudes autom\u00e1ticas; la clave de Yandex se obtiene en yandex.ru/dev/translate."},
+    {L"Ключ хранится в settings.json и передаётся только сервису Google. Без ключа перевод идёт через бесплатные эндпоинты, но сервис может ограничивать автоматические запросы.", L"La clave se guarda en settings.json y se envía solo a Google. Sin clave, la traducción va por puntos de acceso gratuitos, pero el servicio puede limitar las solicitudes automáticas."},
     {L"Онлайн-переводчику модели не нужны — перевод идёт через интернет.", L"El traductor en l\u00ednea no necesita modelos: la traducci\u00f3n va por internet."},
     {L"Google (онлайн)", L"Google (en l\u00ednea)"},
-    {L"Яндекс (онлайн)", L"Yandex (en l\u00ednea)"},
     {L"Онлайн-перевод — модели не нужны:", L"Traducci\u00f3n en l\u00ednea: sin modelos:"},
     {L"Google (онлайн). Нужен интернет; текст уходит на сервис Google.", L"Google (en l\u00ednea). Se requiere internet; el texto se env\u00eda a Google."},
-    {L"Яндекс (онлайн). Нужен интернет и API-ключ в настройках.", L"Yandex (en l\u00ednea). Se requieren internet y una clave API en los ajustes."}
 }};

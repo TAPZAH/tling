@@ -386,26 +386,10 @@ int main() {
             google_key.find("translation.googleapis.com") != std::string::npos &&
                 google_key.find("key=KEY") != std::string::npos,
             "Google URL: официальный API с ключом");
-        const std::string yandex =
-            offline_translator::build_yandex_translate_url(
-                "tr", "ru", "Merhaba", "KEY");
-        require(
-            yandex.find("translate.yandex.net") != std::string::npos &&
-                yandex.find("lang=tr-ru") != std::string::npos,
-            "Яндекс URL: пара языков");
-        require(
-            offline_translator::build_yandex_translate_url(
-                "auto", "ru", "x", "K")
-                    .find("lang=ru") != std::string::npos,
-            "Яндекс URL: автоопределение источника");
         require(
             offline_translator::online_language_code(
                 offline_translator::OnlineProvider::google, "he") == "iw",
             "иврит для Google: iw");
-        require(
-            offline_translator::online_language_code(
-                offline_translator::OnlineProvider::yandex, "zh") == "zh",
-            "китайский для Яндекса: zh");
         require(
             offline_translator::parse_google_translation(
                 "{\"data\":{\"translations\":[{\"translatedText\":"
@@ -430,37 +414,9 @@ int main() {
                 "[[\"Привет, мир\",\"en\"]]") == "Привет, мир",
             "разбор ответа clients5 с автоопределением");
         require(
-            offline_translator::parse_yandex_translation(
-                "{\"code\":200,\"text\":[\"Привет\"]}") == "Привет",
-            "разбор ответа Яндекса");
-        bool key_error = false;
-        try {
-            offline_translator::parse_yandex_translation(
-                "{\"code\":401,\"message\":\"Invalid parameter: key\"}");
-        } catch (const std::exception& error) {
-            key_error =
-                std::string(error.what()).find("ключ") != std::string::npos;
-        }
-        require(key_error, "ошибка ключа Яндекса объясняется понятно");
-        // Без ключа Яндекс не делает запрос, а сразу объясняет проблему.
-        offline_translator::OnlineEngine yandex_engine(
-            offline_translator::OnlineProvider::yandex, "");
-        bool engine_key_error = false;
-        try {
-            yandex_engine.translate("Merhaba", "tr", "ru");
-        } catch (const std::exception& error) {
-            engine_key_error =
-                std::string(error.what()).find("API-ключ") != std::string::npos;
-        }
-        require(engine_key_error, "Яндекс без ключа: понятная ошибка");
-        require(
             offline_translator::engine_kind_from_settings("google") ==
                 offline_translator::EngineKind::google,
             "настройки: движок google");
-        require(
-            offline_translator::settings_engine_name(
-                offline_translator::EngineKind::yandex) == "yandex",
-            "настройки: имя движка yandex");
     }
 
     const auto nllb_root =
@@ -1353,10 +1309,9 @@ int main() {
         require(
             !load_settings(path).turbo_translation,
             "turbo_translation выключается обратно");
-        // Онлайн-движки и их ключи переживают сохранение.
+        // Онлайн-движок и его ключ переживают сохранение.
         loaded.engine = "google";
         loaded.google_api_key = "G-KEY";
-        loaded.yandex_api_key = "Y-KEY";
         save_settings(path, loaded);
         {
             const auto online = load_settings(path);
@@ -1364,15 +1319,7 @@ int main() {
             require(
                 online.google_api_key == "G-KEY",
                 "ключ Google сохраняется");
-            require(
-                online.yandex_api_key == "Y-KEY",
-                "ключ Яндекса сохраняется");
         }
-        loaded.engine = "yandex";
-        save_settings(path, loaded);
-        require(
-            load_settings(path).engine == "yandex",
-            "engine=yandex сохраняется");
         loaded.engine = "argos";
         require(
             copy_roundtrip.clipboard_history_limit == 7,

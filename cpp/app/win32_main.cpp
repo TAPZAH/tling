@@ -112,7 +112,6 @@ constexpr int kSettingsPackagesButton = 1226;
 constexpr int kSettingsEngineCombo = 1227;
 constexpr int kSettingsUiLanguage = 1228;
 constexpr int kSettingsGoogleKey = 1229;
-constexpr int kSettingsYandexKey = 1230;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
@@ -175,7 +174,6 @@ HWND g_settings_engine_combo = nullptr;
 HWND g_settings_behavior_summary = nullptr;
 HWND g_settings_ui_language = nullptr;
 HWND g_settings_google_key = nullptr;
-HWND g_settings_yandex_key = nullptr;
 std::atomic<bool> g_update_busy{false};
 std::optional<offline_translator::UpdateInfo> g_pending_update;
 HWND g_selection_button = nullptr;
@@ -232,7 +230,7 @@ struct UpdateInstallPayload {
 };
 
 void sel_log(const std::string& line);
-// Онлайн-движки (Google, Яндекс) не используют модели.
+// Онлайн-движок (Google) не использует модели.
 bool is_online_engine(offline_translator::EngineKind kind);
 std::string runtime_flags();
 void store_runtime_settings(const offline_translator::AppSettings& settings);
@@ -430,8 +428,7 @@ std::filesystem::path model_root_for_kind(
         case offline_translator::EngineKind::marian:
             return std::filesystem::path(marian_model_root());
         case offline_translator::EngineKind::google:
-        case offline_translator::EngineKind::yandex:
-            // Онлайн-движкам модели не нужны.
+            // Онлайн-движку модели не нужны.
             return {};
         case offline_translator::EngineKind::argos:
             break;
@@ -446,9 +443,6 @@ std::string online_api_key_for_kind(offline_translator::EngineKind kind) {
     }
     if (kind == offline_translator::EngineKind::google) {
         return g_runtime->settings.google_api_key;
-    }
-    if (kind == offline_translator::EngineKind::yandex) {
-        return g_runtime->settings.yandex_api_key;
     }
     return {};
 }
@@ -794,16 +788,12 @@ offline_translator::EngineKind selected_engine() {
     if (index == 4) {
         return offline_translator::EngineKind::google;
     }
-    if (index == 5) {
-        return offline_translator::EngineKind::yandex;
-    }
     return offline_translator::EngineKind::argos;
 }
 
 // Онлайн-движки не используют модели: их «пакеты» не нужны.
 bool is_online_engine(offline_translator::EngineKind kind) {
-    return kind == offline_translator::EngineKind::google ||
-        kind == offline_translator::EngineKind::yandex;
+    return kind == offline_translator::EngineKind::google;
 }
 
 int engine_combo_index(offline_translator::EngineKind kind) {
@@ -816,8 +806,6 @@ int engine_combo_index(offline_translator::EngineKind kind) {
             return 3;
         case offline_translator::EngineKind::google:
             return 4;
-        case offline_translator::EngineKind::yandex:
-            return 5;
         case offline_translator::EngineKind::argos:
             break;
     }
@@ -1566,7 +1554,6 @@ void refresh_package_list() {
                 caption = 3;
                 break;
             case offline_translator::EngineKind::google:
-            case offline_translator::EngineKind::yandex:
                 caption = 4;
                 break;
             case offline_translator::EngineKind::argos:
@@ -4193,10 +4180,6 @@ void apply_settings_dialog(HWND settings_window) {
         settings.google_api_key =
             trim_spaces(to_utf8(control_text(g_settings_google_key)));
     }
-    if (g_settings_yandex_key) {
-        settings.yandex_api_key =
-            trim_spaces(to_utf8(control_text(g_settings_yandex_key)));
-    }
     if (g_runtime->main_window && g_engine_combo) {
         settings.engine =
             offline_translator::settings_engine_name(selected_engine());
@@ -4261,7 +4244,6 @@ void close_settings_window() {
     g_settings_engine_combo = nullptr;
     g_settings_behavior_summary = nullptr;
     g_settings_google_key = nullptr;
-    g_settings_yandex_key = nullptr;
     for (int index = 0; index < 5; ++index) {
         g_settings_nav[index] = nullptr;
     }
@@ -4459,11 +4441,6 @@ LRESULT CALLBACK settings_proc_impl(
         reinterpret_cast<LPARAM>(L"Google (онлайн)"));
     SendMessageW(
         g_settings_engine_combo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Яндекс (онлайн)"));
-    SendMessageW(
-        g_settings_engine_combo,
         CB_SETCURSEL,
             engine_combo_index(
                 offline_translator::engine_kind_from_settings(
@@ -4488,12 +4465,12 @@ LRESULT CALLBACK settings_proc_impl(
             180,
             28,
             kSettingsPackagesButton);
-        // Онлайн-перевод: движки Google и Яндекс работают через интернет,
-        // поэтому ключи API указываются здесь.
+        // Онлайн-перевод: движок Google работает через интернет, поэтому
+        // ключ API (необязательный) указывается здесь.
         HWND online_title = content(
             kSettingsPageLanguages,
             L"STATIC",
-            L"Онлайн-перевод (Google и Яндекс)",
+            L"Онлайн-перевод (Google)",
             0,
             16,
             190,
@@ -4526,32 +4503,12 @@ LRESULT CALLBACK settings_proc_impl(
         content(
             kSettingsPageLanguages,
             L"STATIC",
-            L"Ключ Яндекс.Переводчика (обязателен):",
+            L"Ключ хранится в settings.json и передаётся только сервису "
+            L"Google. Без ключа перевод идёт через бесплатные эндпоинты, "
+            L"но сервис может ограничивать автоматические запросы.",
             0,
             16,
             276,
-            340,
-            18);
-        g_settings_yandex_key = content(
-            kSettingsPageLanguages,
-            L"EDIT",
-            from_utf8(settings.yandex_api_key).c_str(),
-            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-            16,
-            298,
-            460,
-            24,
-            kSettingsYandexKey);
-        content(
-            kSettingsPageLanguages,
-            L"STATIC",
-            L"Ключи хранятся в settings.json и передаются только выбранному "
-            L"сервису. Google переводит и без ключа, но сервис может "
-            L"ограничивать автоматические запросы; ключ Яндекса — на "
-            L"yandex.ru/dev/translate.",
-            0,
-            16,
-            330,
             460,
             54);
         // ===== Страница «Поведение» =====
@@ -5314,7 +5271,6 @@ LRESULT CALLBACK settings_proc_impl(
         g_settings_engine_combo = nullptr;
     g_settings_behavior_summary = nullptr;
         g_settings_google_key = nullptr;
-        g_settings_yandex_key = nullptr;
         for (int index = 0; index < 5; ++index) {
             g_settings_nav[index] = nullptr;
         }
@@ -5440,11 +5396,6 @@ void create_main_controls(HWND window) {
         CB_ADDSTRING,
         0,
         reinterpret_cast<LPARAM>(L"Google (онлайн)"));
-    SendMessageW(
-        g_engine_combo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Яндекс (онлайн)"));
     SendMessageW(g_engine_combo, CB_SETCURSEL, 0, 0);
     g_packages_button = CreateWindowW(
         L"BUTTON",
@@ -6296,10 +6247,6 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
                     case offline_translator::EngineKind::google:
                         set_status(
                             L"Google (онлайн). Нужен интернет; текст уходит на сервис Google.");
-                        break;
-                    case offline_translator::EngineKind::yandex:
-                        set_status(
-                            L"Яндекс (онлайн). Нужен интернет и API-ключ в настройках.");
                         break;
                 }
             }
