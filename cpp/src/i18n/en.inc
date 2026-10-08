@@ -1,5 +1,5 @@
 // Английский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 151> kStringsEn{{
+constexpr std::array<Pair, 161> kStringsEn{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Automatically copy the selected text to the clipboard"},
     {L"Автор: ", L"Author: "},
     {L"Версия: ", L"Version: "},
@@ -150,4 +150,14 @@ constexpr std::array<Pair, 151> kStringsEn{{
     {L"Нет модели", L"No model"},
     {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"There is no installed model for the selected pair. Open the Packages window to download it?"},
     {L"Авто", L"Auto"},
+    {L"Онлайн-перевод (Google и Яндекс)", L"Online translation (Google and Yandex)"},
+    {L"Ключ Google (необязательно, для надёжности):", L"Google key (optional, for reliability):"},
+    {L"Ключ Яндекс.Переводчика (обязателен):", L"Yandex Translate key (required):"},
+    {L"Ключи хранятся в settings.json и передаются только выбранному сервису. Google переводит и без ключа, но сервис может ограничивать автоматические запросы; ключ Яндекса — на yandex.ru/dev/translate.", L"The keys are stored in settings.json and are sent only to the chosen service. Google translates without a key too, but the service may throttle automated requests; get a Yandex key at yandex.ru/dev/translate."},
+    {L"Онлайн-переводчику модели не нужны — перевод идёт через интернет.", L"The online translator needs no models — translation goes over the internet."},
+    {L"Google (онлайн)", L"Google (online)"},
+    {L"Яндекс (онлайн)", L"Yandex (online)"},
+    {L"Онлайн-перевод — модели не нужны:", L"Online translation — no models needed:"},
+    {L"Google (онлайн). Нужен интернет; текст уходит на сервис Google.", L"Google (online). Internet required; the text is sent to Google."},
+    {L"Яндекс (онлайн). Нужен интернет и API-ключ в настройках.", L"Yandex (online). Internet and an API key in the settings are required."}
 }};

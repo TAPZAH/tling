@@ -14,6 +14,8 @@ enum class EngineKind {
     nllb,
     firefox,
     marian,
+    google,
+    yandex,
 };
 
 class TranslationApplication {
@@ -25,7 +27,8 @@ public:
     TranslationApplication(
         EngineKind engine_kind,
         std::filesystem::path models_root,
-        std::string engine_variant);
+        std::string engine_variant,
+        std::string online_api_key = std::string{});
     ~TranslationApplication();
 
     TranslationApplication(const TranslationApplication&) = delete;
@@ -59,7 +62,8 @@ public:
     TranslationApplication& acquire(
         EngineKind engine_kind,
         const std::filesystem::path& models_root,
-        const std::string& engine_variant = {});
+        const std::string& engine_variant = {},
+        const std::string& online_api_key = {});
     void reset();
     TranslationApplication* get() noexcept;
     const TranslationApplication* get() const noexcept;
@@ -71,6 +75,7 @@ private:
     EngineKind engine_kind_{EngineKind::argos};
     std::filesystem::path models_root_;
     std::string engine_variant_;
+    std::string online_api_key_;
     bool loaded_{false};
 };
 

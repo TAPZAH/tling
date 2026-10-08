@@ -7,6 +7,7 @@
 #include "offline_translator/marian_engine.hpp"
 #include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/nllb_engine.hpp"
+#include "offline_translator/online_engine.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/translation_service.hpp"
 
@@ -17,11 +18,19 @@ namespace offline_translator {
 
 class TranslationApplication::State {
 public:
-    State(EngineKind kind, std::filesystem::path root, std::string variant)
+    State(
+        EngineKind kind,
+        std::filesystem::path root,
+        std::string variant,
+        std::string api_key)
         : engine_kind(kind),
           models_root(std::move(root)),
-          engine_variant(std::move(variant)) {
-        if (models_root.empty()) {
+          engine_variant(std::move(variant)),
+          online_api_key(std::move(api_key)) {
+        const bool online =
+            engine_kind == EngineKind::google ||
+            engine_kind == EngineKind::yandex;
+        if (models_root.empty() && !online) {
             throw std::invalid_argument("Не задан корень моделей");
         }
         if (engine_kind == EngineKind::argos) {
@@ -34,12 +43,23 @@ public:
                 engine_variant.empty() ? std::string{"tiny"} : engine_variant);
         } else if (engine_kind == EngineKind::marian) {
             engine = std::make_unique<MarianEngine>(models_root);
+        } else if (engine_kind == EngineKind::google) {
+            engine = std::make_unique<OnlineEngine>(
+                OnlineProvider::google, online_api_key);
+        } else if (engine_kind == EngineKind::yandex) {
+            engine = std::make_unique<OnlineEngine>(
+                OnlineProvider::yandex, online_api_key);
         } else {
             throw std::invalid_argument("Неизвестный тип движка");
         }
 
         service = std::make_unique<TranslationService>(
             [this](std::string_view source, std::string_view target) {
+                if (engine_kind == EngineKind::google ||
+                    engine_kind == EngineKind::yandex) {
+                    // Онлайн-сервису модели не нужны.
+                    return true;
+                }
                 if (engine_kind == EngineKind::argos) {
                     return ArgosModelManager(
                                models_root,
@@ -83,6 +103,7 @@ public:
     EngineKind engine_kind;
     std::filesystem::path models_root;
     std::string engine_variant;
+    std::string online_api_key;
     std::unique_ptr<TranslationEngine> engine;
     std::unique_ptr<TranslationService> service;
 };
@@ -98,11 +119,13 @@ TranslationApplication::TranslationApplication(
 TranslationApplication::TranslationApplication(
     EngineKind engine_kind,
     std::filesystem::path models_root,
-    std::string engine_variant)
+    std::string engine_variant,
+    std::string online_api_key)
     : state_(std::make_unique<State>(
           engine_kind,
           std::move(models_root),
-          std::move(engine_variant))) {}
+          std::move(engine_variant),
+          std::move(online_api_key))) {}
 
 TranslationApplication::~TranslationApplication() {
     if (state_) {
@@ -197,11 +220,17 @@ std::string TranslationApplication::engine_name(EngineKind engine_kind) {
     if (engine_kind == EngineKind::firefox) {
         return "Firefox";
     }
-    if (engine_kind == EngineKind::marian) {
-        return "MarianMT";
+        if (engine_kind == EngineKind::marian) {
+            return "MarianMT";
+        }
+        if (engine_kind == EngineKind::google) {
+            return "Google";
+        }
+        if (engine_kind == EngineKind::yandex) {
+            return "Яндекс";
+        }
+        throw std::invalid_argument("Неизвестный тип движка");
     }
-    throw std::invalid_argument("Неизвестный тип движка");
-}
 
 EngineKind TranslationApplication::engine_kind() const {
     if (!state_) {
@@ -220,19 +249,22 @@ const std::filesystem::path& TranslationApplication::models_root() const {
 TranslationApplication& TranslationSession::acquire(
     EngineKind engine_kind,
     const std::filesystem::path& models_root,
-    const std::string& engine_variant) {
+    const std::string& engine_variant,
+    const std::string& online_api_key) {
     if (application_ && engine_kind_ == engine_kind &&
-        models_root_ == models_root && engine_variant_ == engine_variant) {
+        models_root_ == models_root && engine_variant_ == engine_variant &&
+        online_api_key_ == online_api_key) {
         return *application_;
     }
     application_.reset();
     loaded_ = false;
     application_ =
         std::make_unique<TranslationApplication>(
-            engine_kind, models_root, engine_variant);
+            engine_kind, models_root, engine_variant, online_api_key);
     engine_kind_ = engine_kind;
     models_root_ = models_root;
     engine_variant_ = engine_variant;
+    online_api_key_ = online_api_key;
     return *application_;
 }
 
@@ -241,6 +273,7 @@ void TranslationSession::reset() {
     loaded_ = false;
     models_root_.clear();
     engine_variant_.clear();
+    online_api_key_.clear();
 }
 
 TranslationApplication* TranslationSession::get() noexcept {

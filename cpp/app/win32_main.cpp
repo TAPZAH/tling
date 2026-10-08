@@ -111,6 +111,8 @@ constexpr int kSettingsNavAbout = 1222;
 constexpr int kSettingsPackagesButton = 1226;
 constexpr int kSettingsEngineCombo = 1227;
 constexpr int kSettingsUiLanguage = 1228;
+constexpr int kSettingsGoogleKey = 1229;
+constexpr int kSettingsYandexKey = 1230;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
@@ -172,6 +174,8 @@ HWND g_settings_update_status = nullptr;
 HWND g_settings_engine_combo = nullptr;
 HWND g_settings_behavior_summary = nullptr;
 HWND g_settings_ui_language = nullptr;
+HWND g_settings_google_key = nullptr;
+HWND g_settings_yandex_key = nullptr;
 std::atomic<bool> g_update_busy{false};
 std::optional<offline_translator::UpdateInfo> g_pending_update;
 HWND g_selection_button = nullptr;
@@ -228,6 +232,8 @@ struct UpdateInstallPayload {
 };
 
 void sel_log(const std::string& line);
+// Онлайн-движки (Google, Яндекс) не используют модели.
+bool is_online_engine(offline_translator::EngineKind kind);
 std::string runtime_flags();
 void store_runtime_settings(const offline_translator::AppSettings& settings);
 template <typename Fn>
@@ -423,10 +429,28 @@ std::filesystem::path model_root_for_kind(
             return std::filesystem::path(firefox_model_root());
         case offline_translator::EngineKind::marian:
             return std::filesystem::path(marian_model_root());
+        case offline_translator::EngineKind::google:
+        case offline_translator::EngineKind::yandex:
+            // Онлайн-движкам модели не нужны.
+            return {};
         case offline_translator::EngineKind::argos:
             break;
     }
     return model_root_path(false);
+}
+
+// Ключ онлайн-сервиса для выбранного движка (пусто для офлайн-движков).
+std::string online_api_key_for_kind(offline_translator::EngineKind kind) {
+    if (!g_runtime) {
+        return {};
+    }
+    if (kind == offline_translator::EngineKind::google) {
+        return g_runtime->settings.google_api_key;
+    }
+    if (kind == offline_translator::EngineKind::yandex) {
+        return g_runtime->settings.yandex_api_key;
+    }
+    return {};
 }
 
 std::wstring clipboard_text() {
@@ -442,7 +466,10 @@ std::vector<std::string> available_language_codes(
     offline_translator::EngineKind engine_kind) {
     std::vector<std::string> codes;
     try {
-        if (engine_kind == offline_translator::EngineKind::nllb) {
+        if (engine_kind == offline_translator::EngineKind::nllb ||
+            is_online_engine(engine_kind)) {
+            // NLLB — одна многоязычная модель, онлайн-сервисы — без моделей:
+            // доступны все языки списка.
             for (const auto& entry : offline_translator::supported_languages()) {
                 codes.push_back(entry.code);
             }
@@ -764,7 +791,19 @@ offline_translator::EngineKind selected_engine() {
     if (index == 3) {
         return offline_translator::EngineKind::marian;
     }
+    if (index == 4) {
+        return offline_translator::EngineKind::google;
+    }
+    if (index == 5) {
+        return offline_translator::EngineKind::yandex;
+    }
     return offline_translator::EngineKind::argos;
+}
+
+// Онлайн-движки не используют модели: их «пакеты» не нужны.
+bool is_online_engine(offline_translator::EngineKind kind) {
+    return kind == offline_translator::EngineKind::google ||
+        kind == offline_translator::EngineKind::yandex;
 }
 
 int engine_combo_index(offline_translator::EngineKind kind) {
@@ -775,6 +814,10 @@ int engine_combo_index(offline_translator::EngineKind kind) {
             return 2;
         case offline_translator::EngineKind::marian:
             return 3;
+        case offline_translator::EngineKind::google:
+            return 4;
+        case offline_translator::EngineKind::yandex:
+            return 5;
         case offline_translator::EngineKind::argos:
             break;
     }
@@ -835,6 +878,21 @@ extern HWND g_settings_nav[];
 
 std::unordered_map<HWND, std::wstring> g_ui_originals;
 std::unordered_map<HWND, std::vector<std::wstring>> g_ui_combo_originals;
+
+// Обрезка пробелов по краям (для ключей API из полей ввода).
+std::string trim_spaces(std::string text) {
+    while (!text.empty() &&
+           (text.front() == ' ' || text.front() == '\t' ||
+            text.front() == '\r' || text.front() == '\n')) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() &&
+           (text.back() == ' ' || text.back() == '\t' ||
+            text.back() == '\r' || text.back() == '\n')) {
+        text.pop_back();
+    }
+    return text;
+}
 
 void update_behavior_summary() {
     if (!g_settings_behavior_summary || !IsWindow(g_settings_behavior_summary)) {
@@ -1213,12 +1271,13 @@ void start_translation(HWND window) {
         engine_kind == offline_translator::EngineKind::firefox
             ? (g_runtime ? g_runtime->settings.architecture : std::string{"tiny"})
             : std::string{};
+    const std::string api_key = online_api_key_for_kind(engine_kind);
     persist_settings(window);
     set_main_busy(true);
     set_status(L"Подготовка перевода...");
     auto runtime = g_runtime;
     std::thread(
-        [window, text, root, engine_kind, engine_variant, source_language, target_language, runtime]() {
+        [window, text, root, engine_kind, engine_variant, api_key, source_language, target_language, runtime]() {
             auto result = std::make_unique<StatusPayload>();
             const auto started = GetTickCount64();
             try {
@@ -1228,7 +1287,7 @@ void start_translation(HWND window) {
                     return;
                 }
                 auto& application =
-                    runtime->session.acquire(engine_kind, root, engine_variant);
+                    runtime->session.acquire(engine_kind, root, engine_variant, api_key);
                 if (!runtime->session.is_loaded()) {
                     offline_translator::app_log_info("загрузка модели окна");
                     post_status(window, "Загрузка модели...");
@@ -1493,6 +1552,7 @@ void refresh_package_list() {
             L"Пакет NLLB-200 — одна модель на ~200 языков:",
             L"Пакеты Firefox Translations:",
             L"Пакеты MarianMT — модели OPUS-MT с Hugging Face:",
+            L"Онлайн-перевод — модели не нужны:",
         };
         int caption = 0;
         switch (selected_engine()) {
@@ -1504,6 +1564,10 @@ void refresh_package_list() {
                 break;
             case offline_translator::EngineKind::marian:
                 caption = 3;
+                break;
+            case offline_translator::EngineKind::google:
+            case offline_translator::EngineKind::yandex:
+                caption = 4;
                 break;
             case offline_translator::EngineKind::argos:
                 break;
@@ -1524,6 +1588,19 @@ void refresh_package_list() {
             CB_SETCURSEL,
             architecture == "base" ? 1 : 0,
             0);
+    }
+    if (is_online_engine(selected_engine())) {
+        // Онлайн-переводчики работают без моделей: списка пакетов нет.
+        g_runtime->package_rows_all.clear();
+        apply_package_filter();
+        if (g_package_status) {
+            SetWindowTextW(
+                g_package_status,
+                offline_translator::tr(
+                    L"Онлайн-переводчику модели не нужны — перевод идёт через интернет.")
+                    .c_str());
+        }
+        return;
     }
     g_runtime->package_rows_all = collect_package_rows();
     apply_package_filter();
@@ -3075,8 +3152,9 @@ void start_selection_translation(HWND main_window) {
         engine_kind == offline_translator::EngineKind::firefox
             ? (g_runtime ? g_runtime->settings.architecture : std::string{"tiny"})
             : std::string{};
+    const std::string api_key = online_api_key_for_kind(engine_kind);
     auto runtime = g_runtime;
-    std::thread([main_window, text, direction, engine_kind, engine_variant, root, runtime]() {
+    std::thread([main_window, text, direction, engine_kind, engine_variant, api_key, root, runtime]() {
         auto result = std::make_unique<StatusPayload>();
         const auto started = GetTickCount64();
         try {
@@ -3086,7 +3164,7 @@ void start_selection_translation(HWND main_window) {
                 return;
             }
             auto& application =
-                runtime->session.acquire(engine_kind, root, engine_variant);
+                runtime->session.acquire(engine_kind, root, engine_variant, api_key);
             result->text = from_utf8(
                 application.translate(text, direction.first, direction.second)
                     .text);
@@ -4110,6 +4188,15 @@ void apply_settings_dialog(HWND settings_window) {
         SendMessageW(g_settings_theme_dark, BM_GETCHECK, 0, 0) == BST_CHECKED
             ? std::string{offline_translator::kUiThemeDark}
             : std::string{offline_translator::kUiThemeLight};
+    // Ключи онлайн-переводчиков: обрезаем пробелы по краям.
+    if (g_settings_google_key) {
+        settings.google_api_key =
+            trim_spaces(to_utf8(control_text(g_settings_google_key)));
+    }
+    if (g_settings_yandex_key) {
+        settings.yandex_api_key =
+            trim_spaces(to_utf8(control_text(g_settings_yandex_key)));
+    }
     if (g_runtime->main_window && g_engine_combo) {
         settings.engine =
             offline_translator::settings_engine_name(selected_engine());
@@ -4173,6 +4260,8 @@ void close_settings_window() {
     g_settings_cancel = nullptr;
     g_settings_engine_combo = nullptr;
     g_settings_behavior_summary = nullptr;
+    g_settings_google_key = nullptr;
+    g_settings_yandex_key = nullptr;
     for (int index = 0; index < 5; ++index) {
         g_settings_nav[index] = nullptr;
     }
@@ -4358,14 +4447,24 @@ LRESULT CALLBACK settings_proc_impl(
             CB_ADDSTRING,
             0,
             reinterpret_cast<LPARAM>(L"Firefox"));
-        SendMessageW(
-            g_settings_engine_combo,
-            CB_ADDSTRING,
-            0,
-            reinterpret_cast<LPARAM>(L"MarianMT"));
-        SendMessageW(
-            g_settings_engine_combo,
-            CB_SETCURSEL,
+    SendMessageW(
+        g_settings_engine_combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"MarianMT"));
+    SendMessageW(
+        g_settings_engine_combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Google (онлайн)"));
+    SendMessageW(
+        g_settings_engine_combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Яндекс (онлайн)"));
+    SendMessageW(
+        g_settings_engine_combo,
+        CB_SETCURSEL,
             engine_combo_index(
                 offline_translator::engine_kind_from_settings(
                     settings.engine)),
@@ -4389,6 +4488,72 @@ LRESULT CALLBACK settings_proc_impl(
             180,
             28,
             kSettingsPackagesButton);
+        // Онлайн-перевод: движки Google и Яндекс работают через интернет,
+        // поэтому ключи API указываются здесь.
+        HWND online_title = content(
+            kSettingsPageLanguages,
+            L"STATIC",
+            L"Онлайн-перевод (Google и Яндекс)",
+            0,
+            16,
+            190,
+            340,
+            24);
+        SendMessageW(
+            online_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        content(
+            kSettingsPageLanguages,
+            L"STATIC",
+            L"Ключ Google (необязательно, для надёжности):",
+            0,
+            16,
+            220,
+            340,
+            18);
+        g_settings_google_key = content(
+            kSettingsPageLanguages,
+            L"EDIT",
+            from_utf8(settings.google_api_key).c_str(),
+            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+            16,
+            242,
+            460,
+            24,
+            kSettingsGoogleKey);
+        content(
+            kSettingsPageLanguages,
+            L"STATIC",
+            L"Ключ Яндекс.Переводчика (обязателен):",
+            0,
+            16,
+            276,
+            340,
+            18);
+        g_settings_yandex_key = content(
+            kSettingsPageLanguages,
+            L"EDIT",
+            from_utf8(settings.yandex_api_key).c_str(),
+            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+            16,
+            298,
+            460,
+            24,
+            kSettingsYandexKey);
+        content(
+            kSettingsPageLanguages,
+            L"STATIC",
+            L"Ключи хранятся в settings.json и передаются только выбранному "
+            L"сервису. Google переводит и без ключа, но сервис может "
+            L"ограничивать автоматические запросы; ключ Яндекса — на "
+            L"yandex.ru/dev/translate.",
+            0,
+            16,
+            330,
+            460,
+            54);
         // ===== Страница «Поведение» =====
         // Сводка выбранных опций поведения (как в ранних версиях):
         // рамка «Сейчас работает» с буллетами, обновляется при изменении
@@ -5148,6 +5313,8 @@ LRESULT CALLBACK settings_proc_impl(
         g_settings_cancel = nullptr;
         g_settings_engine_combo = nullptr;
     g_settings_behavior_summary = nullptr;
+        g_settings_google_key = nullptr;
+        g_settings_yandex_key = nullptr;
         for (int index = 0; index < 5; ++index) {
             g_settings_nav[index] = nullptr;
         }
@@ -5268,6 +5435,16 @@ void create_main_controls(HWND window) {
         CB_ADDSTRING,
         0,
         reinterpret_cast<LPARAM>(L"MarianMT"));
+    SendMessageW(
+        g_engine_combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Google (онлайн)"));
+    SendMessageW(
+        g_engine_combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Яндекс (онлайн)"));
     SendMessageW(g_engine_combo, CB_SETCURSEL, 0, 0);
     g_packages_button = CreateWindowW(
         L"BUTTON",
@@ -6114,7 +6291,15 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
                         break;
                     case offline_translator::EngineKind::argos:
                         set_status(
-                            L"Выбран Argos. Пакет загрузится при переводе.");
+                            L"Движок Argos. Модели загружаются по парам.");
+                        break;
+                    case offline_translator::EngineKind::google:
+                        set_status(
+                            L"Google (онлайн). Нужен интернет; текст уходит на сервис Google.");
+                        break;
+                    case offline_translator::EngineKind::yandex:
+                        set_status(
+                            L"Яндекс (онлайн). Нужен интернет и API-ключ в настройках.");
                         break;
                 }
             }

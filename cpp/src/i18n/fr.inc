@@ -1,5 +1,5 @@
 // Французский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 151> kStringsFr{{
+constexpr std::array<Pair, 161> kStringsFr{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copier automatiquement le texte s\u00e9lectionn\u00e9 dans le presse-papiers"},
     {L"Автор: ", L"Auteur : "},
     {L"Версия: ", L"Version : "},
@@ -150,4 +150,14 @@ constexpr std::array<Pair, 151> kStringsFr{{
     {L"Нет модели", L"Aucun mod\u00e8le"},
     {L"Для выбранной пары нет установленной модели. Открыть окно «Пакеты», чтобы скачать её?", L"Aucun mod\u00e8le n\u2019est install\u00e9 pour cette paire. Ouvrir la fen\u00eatre \u00ab Paquets \u00bb pour le t\u00e9l\u00e9charger ?"},
     {L"Авто", L"Auto"},
+    {L"Онлайн-перевод (Google и Яндекс)", L"Traduction en ligne (Google et Yandex)"},
+    {L"Ключ Google (необязательно, для надёжности):", L"Cl\u00e9 Google (facultative, pour la fiabilit\u00e9) :"},
+    {L"Ключ Яндекс.Переводчика (обязателен):", L"Cl\u00e9 Yandex.Translate (obligatoire) :"},
+    {L"Ключи хранятся в settings.json и передаются только выбранному сервису. Google переводит и без ключа, но сервис может ограничивать автоматические запросы; ключ Яндекса — на yandex.ru/dev/translate.", L"Les cl\u00e9s sont stock\u00e9es dans settings.json et transmises uniquement au service choisi. Google traduit aussi sans cl\u00e9, mais le service peut limiter les requ\u00eates automatiques ; la cl\u00e9 Yandex s\u2019obtient sur yandex.ru/dev/translate."},
+    {L"Онлайн-переводчику модели не нужны — перевод идёт через интернет.", L"Le traducteur en ligne n\u2019a pas besoin de mod\u00e8les \u2014 la traduction passe par Internet."},
+    {L"Google (онлайн)", L"Google (en ligne)"},
+    {L"Яндекс (онлайн)", L"Yandex (en ligne)"},
+    {L"Онлайн-перевод — модели не нужны:", L"Traduction en ligne \u2014 aucun mod\u00e8le requis :"},
+    {L"Google (онлайн). Нужен интернет; текст уходит на сервис Google.", L"Google (en ligne). Internet requis ; le texte est envoy\u00e9 \u00e0 Google."},
+    {L"Яндекс (онлайн). Нужен интернет и API-ключ в настройках.", L"Yandex (en ligne). Internet et une cl\u00e9 API dans les param\u00e8tres sont requis."}
 }};

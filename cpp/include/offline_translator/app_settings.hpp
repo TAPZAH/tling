@@ -37,6 +37,9 @@ struct AppSettings {
     bool auto_copy_selection{false};
     // Турбо-перевод: переводить выделенный текст сразу, без кнопки у курсора.
     bool turbo_translation{false};
+    // Ключи онлайн-переводчиков (пусто — не задан).
+    std::string google_api_key;
+    std::string yandex_api_key;
     int clipboard_history_limit{10};
 };
 

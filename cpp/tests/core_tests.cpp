@@ -13,6 +13,7 @@
 #include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/nllb_language.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
+#include "offline_translator/online_engine.hpp"
 #include "offline_translator/selection.hpp"
 #include "offline_translator/text_split.hpp"
 #include "offline_translator/translation_service.hpp"
@@ -363,9 +364,94 @@ int main() {
     }
     require(stopped_thrown, "остановленный сервис бросает");
 
+    {
+        // Онлайн-перевод: сборка URL, коды языков и разбор ответов.
+        const std::string google_free =
+            offline_translator::build_google_translate_url(
+                "tr", "ru", "Merhaba dünya", "");
+        require(
+            google_free.find("translate.googleapis.com") != std::string::npos,
+            "Google URL: бесплатный эндпоинт без ключа");
+        require(
+            google_free.find("sl=tr") != std::string::npos &&
+                google_free.find("tl=ru") != std::string::npos,
+            "Google URL: языки подставлены");
+        require(
+            google_free.find("Merhaba%20d%C3%BCnya") != std::string::npos,
+            "Google URL: текст закодирован");
+        const std::string google_key =
+            offline_translator::build_google_translate_url(
+                "en", "de", "hi", "KEY");
+        require(
+            google_key.find("translation.googleapis.com") != std::string::npos &&
+                google_key.find("key=KEY") != std::string::npos,
+            "Google URL: официальный API с ключом");
+        const std::string yandex =
+            offline_translator::build_yandex_translate_url(
+                "tr", "ru", "Merhaba", "KEY");
+        require(
+            yandex.find("translate.yandex.net") != std::string::npos &&
+                yandex.find("lang=tr-ru") != std::string::npos,
+            "Яндекс URL: пара языков");
+        require(
+            offline_translator::build_yandex_translate_url(
+                "auto", "ru", "x", "K")
+                    .find("lang=ru") != std::string::npos,
+            "Яндекс URL: автоопределение источника");
+        require(
+            offline_translator::online_language_code(
+                offline_translator::OnlineProvider::google, "he") == "iw",
+            "иврит для Google: iw");
+        require(
+            offline_translator::online_language_code(
+                offline_translator::OnlineProvider::yandex, "zh") == "zh",
+            "китайский для Яндекса: zh");
+        require(
+            offline_translator::parse_google_translation(
+                "{\"data\":{\"translations\":[{\"translatedText\":"
+                "\"Привет\"}]}}") == "Привет",
+            "разбор ответа Google v2");
+        require(
+            offline_translator::parse_google_translation(
+                "[[[\"Привет\",\"Hello\",null,null,10]],null,\"en\"]") ==
+                "Привет",
+            "разбор ответа Google gtx");
+        require(
+            offline_translator::parse_yandex_translation(
+                "{\"code\":200,\"text\":[\"Привет\"]}") == "Привет",
+            "разбор ответа Яндекса");
+        bool key_error = false;
+        try {
+            offline_translator::parse_yandex_translation(
+                "{\"code\":401,\"message\":\"Invalid parameter: key\"}");
+        } catch (const std::exception& error) {
+            key_error =
+                std::string(error.what()).find("ключ") != std::string::npos;
+        }
+        require(key_error, "ошибка ключа Яндекса объясняется понятно");
+        // Без ключа Яндекс не делает запрос, а сразу объясняет проблему.
+        offline_translator::OnlineEngine yandex_engine(
+            offline_translator::OnlineProvider::yandex, "");
+        bool engine_key_error = false;
+        try {
+            yandex_engine.translate("Merhaba", "tr", "ru");
+        } catch (const std::exception& error) {
+            engine_key_error =
+                std::string(error.what()).find("API-ключ") != std::string::npos;
+        }
+        require(engine_key_error, "Яндекс без ключа: понятная ошибка");
+        require(
+            offline_translator::engine_kind_from_settings("google") ==
+                offline_translator::EngineKind::google,
+            "настройки: движок google");
+        require(
+            offline_translator::settings_engine_name(
+                offline_translator::EngineKind::yandex) == "yandex",
+            "настройки: имя движка yandex");
+    }
+
     const auto nllb_root =
-        std::filesystem::temp_directory_path() / "offline-translator-nllb-mgmt";
-    std::filesystem::remove_all(nllb_root);
+        std::filesystem::temp_directory_path() / "offline-translator-nllb-mgmt";    std::filesystem::remove_all(nllb_root);
     {
         NllbModelManager missing(nllb_root, 1);
         require(!missing.is_installed(), "пустой корень NLLB не установлен");

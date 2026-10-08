@@ -228,6 +228,10 @@ AppSettings load_settings(const std::filesystem::path& path) {
             read_bool(data, "auto_copy_selection", false);
         settings.turbo_translation =
             read_bool(data, "turbo_translation", false);
+        settings.google_api_key =
+            read_string(data, "google_api_key", std::string{});
+        settings.yandex_api_key =
+            read_string(data, "yandex_api_key", std::string{});
         settings.clipboard_history_limit = normalize_clipboard_history_limit(
             read_int(
                 data,
@@ -276,6 +280,8 @@ void save_settings(
     data["ui_theme"] = normalize_ui_theme(settings.ui_theme);
     data["auto_copy_selection"] = settings.auto_copy_selection;
     data["turbo_translation"] = settings.turbo_translation;
+    data["google_api_key"] = settings.google_api_key;
+    data["yandex_api_key"] = settings.yandex_api_key;
     data["clipboard_history_limit"] =
         normalize_clipboard_history_limit(settings.clipboard_history_limit);
     fs_utils::write_text_file(path, data.dump(2) + "\n");
@@ -290,6 +296,12 @@ EngineKind engine_kind_from_settings(std::string_view engine) {
     }
     if (engine == "marian") {
         return EngineKind::marian;
+    }
+    if (engine == "google") {
+        return EngineKind::google;
+    }
+    if (engine == "yandex") {
+        return EngineKind::yandex;
     }
     return EngineKind::argos;
 }
@@ -313,6 +325,12 @@ std::string settings_engine_name(EngineKind engine_kind) {
     }
     if (engine_kind == EngineKind::marian) {
         return "marian";
+    }
+    if (engine_kind == EngineKind::google) {
+        return "google";
+    }
+    if (engine_kind == EngineKind::yandex) {
+        return "yandex";
     }
     throw std::invalid_argument("Неизвестный тип движка");
 }

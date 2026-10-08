@@ -102,6 +102,7 @@ add_library(offline_translator_core
     src/nllb_model_manager.cpp
     src/nllb_language.cpp
     src/nllb_engine.cpp
+    src/online_engine.cpp
     src/selection.cpp
     src/text_split.cpp
     src/translation_application.cpp
