@@ -5,8 +5,8 @@
 namespace offline_translator {
 
 inline constexpr std::string_view kAppName = "TLing";
-inline constexpr std::string_view kAppVersion = "0.99.6-beta";
-inline constexpr std::string_view kAppVersionDisplay = "beta 0.99.6";
+inline constexpr std::string_view kAppVersion = "0.99.7-beta";
+inline constexpr std::string_view kAppVersionDisplay = "beta 0.99.7";
 inline constexpr std::string_view kAppPublisher = "TAP3AH";
 
 }  // пространство имён offline_translator
