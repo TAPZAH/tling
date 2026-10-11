@@ -181,6 +181,10 @@ function Copy-LicenseFiles {
         "sentencepiece" = "copyright-SentencePiece.txt"
         "nlohmann-json" = "copyright-nlohmann-json.txt"
         "utf8-range" = "copyright-utf8-range.txt"
+        "tesseract" = "copyright-tesseract.txt"
+        "leptonica" = "copyright-leptonica.txt"
+        "curl" = "copyright-curl.txt"
+        "libarchive" = "copyright-libarchive.txt"
     }
     foreach ($entry in $vcpkgLicenses.GetEnumerator()) {
         foreach ($root in $shareRoots) {
@@ -281,6 +285,12 @@ try {
         } else {
             Write-Warning "Нет $name рядом со сборкой — часть функций может не работать"
         }
+    }
+    # OCR: Tesseract и весь его runtime-closure (leptonica, libcurl, libarchive
+    # и транзитивные зависимости). CMake уже кладёт полный набор DLL рядом с
+    # TLing.exe, поэтому переносим оставшиеся.
+    Get-ChildItem -LiteralPath $releaseDir -Filter "*.dll" -File | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $OutputDir -Force
     }
     Copy-VcRedistDlls -TargetDirectory $OutputDir
 

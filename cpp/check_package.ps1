@@ -38,6 +38,7 @@ function Test-RequiredLayout {
         "openblas.dll",
         "libprotobuf.dll",
         "abseil_dll.dll",
+        "tesseract55.dll",
         "vcruntime140.dll",
         "vcruntime140_1.dll",
         "msvcp140.dll",
@@ -105,7 +106,13 @@ function Get-SystemDllNames {
         "uxtheme.dll", "dwmapi.dll", "setupapi.dll", "cfgmgr32.dll", "powrprof.dll",
         "iphlpapi.dll", "normaliz.dll", "nsi.dll", "dnsapi.dll", "mswsock.dll",
         "sspicli.dll", "userenv.dll", "profapi.dll", "version.dll", "winmm.dll",
-        "msvcrt.dll", "ucrtbase.dll", "ninput.dll", "win32u.dll", "gdiplus.dll"
+        "msvcrt.dll", "ucrtbase.dll", "ninput.dll", "win32u.dll", "gdiplus.dll",
+        "wldap32.dll", "secur32.dll", "urlmon.dll", "schannel.dll",
+        "ncrypt.dll", "wintrust.dll", "wtsapi32.dll", "propsys.dll",
+        "shcore.dll", "netapi32.dll", "d2d1.dll", "mfplat.dll", "d3d11.dll",
+        "dxgi.dll", "opengl32.dll", "glu32.dll", "avrt.dll", "winspool.drv",
+        "rasapi32.dll", "psapi.dll", "msi.dll", "cabinet.dll", "mpr.dll",
+        "xmllite.dll"
     )
 }
 
