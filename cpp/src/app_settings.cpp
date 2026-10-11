@@ -201,6 +201,11 @@ AppSettings load_settings(const std::filesystem::path& path) {
         if (settings.target_language.empty()) {
             settings.target_language = "ru";
         }
+        settings.fallback_target_language =
+            read_string(data, "fallback_target_language", "en");
+        if (settings.fallback_target_language.empty()) {
+            settings.fallback_target_language = "en";
+        }
         settings.window_width = read_int(data, "window_width", 0);
         settings.window_height = read_int(data, "window_height", 0);
         if (settings.window_width < 0) {
@@ -253,6 +258,9 @@ void save_settings(
         engine_kind_from_settings(settings.engine));
     data["source_language"] = settings.source_language;
     data["target_language"] = settings.target_language;
+    data["fallback_target_language"] = settings.fallback_target_language.empty()
+        ? std::string{"en"}
+        : settings.fallback_target_language;
     if (settings.window_width > 0) {
         data["window_width"] = settings.window_width;
     }

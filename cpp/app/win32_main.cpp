@@ -13,10 +13,13 @@
 #include "offline_translator/language_store.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/language_detect.hpp"
+#include "offline_translator/ocr_engine.hpp"
 #include "offline_translator/route_planner.hpp"
 #include "offline_translator/selection.hpp"
 #include "offline_translator/translation_application.hpp"
 #include "offline_translator/window_policy.hpp"
+
+#include "screen_ocr.hpp"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -77,6 +80,7 @@ constexpr int kTranslateButton = 1003;
 constexpr int kResultEdit = 1004;
 constexpr int kSourceLanguageCombo = 1005;
 constexpr int kTargetLanguageCombo = 1006;
+constexpr int kFallbackTargetCombo = 1011;
 constexpr int kPackagesButton = 1007;
 constexpr int kStatusLabel = 1008;
 constexpr int kSettingsButton = 1009;
@@ -115,13 +119,16 @@ constexpr int kSettingsGoogleKey = 1229;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
+constexpr int kScreenOcrButton = 1010;
 constexpr int kShowWindowHotkey = 2001;
+constexpr int kScreenOcrHotkey = 2002;
 constexpr int kTrayOpen = 3001;
 constexpr int kTrayAutostart = 3002;
 constexpr int kTrayExit = 3003;
 constexpr int kTrayCheckUpdate = 3004;
 constexpr int kTrayAutoCopy = 3005;
 constexpr int kTrayTurbo = 3006;
+constexpr int kTrayScreenOcr = 3007;
 constexpr int kTrayHistoryRoot = 3097;
 constexpr int kTrayHistoryEmpty = 3098;
 constexpr int kTrayHistoryClear = 3099;
@@ -130,17 +137,21 @@ constexpr int kTrayHistoryLast = 3149;
 constexpr int kTrayHistoryTranslateFirst = 3200;
 constexpr int kTrayHistoryTranslateLast = 3249;
 constexpr int kTrayHistoryPreviewFirst = 3300;
-constexpr int kDefaultWindowWidth = 560;
+constexpr int kDefaultWindowWidth = 780;
 constexpr int kDefaultWindowHeight = 450;
-constexpr int kMinWindowWidth = 520;
+constexpr int kMinWindowWidth = 750;
 constexpr int kMinWindowHeight = 400;
 
 HWND g_engine_combo = nullptr;
 HWND g_source_edit = nullptr;
 HWND g_translate_button = nullptr;
+HWND g_screen_ocr_button = nullptr;
 HWND g_result_edit = nullptr;
 HWND g_source_language_combo = nullptr;
 HWND g_target_language_combo = nullptr;
+HWND g_fallback_target_language_combo = nullptr;
+HWND g_fallback_target_label = nullptr;
+HWND g_both_directions_label = nullptr;
 HWND g_packages_button = nullptr;
 HWND g_settings_button = nullptr;
 HWND g_status_label = nullptr;
@@ -183,6 +194,8 @@ HWND g_popup_copy_button = nullptr;
 HWND g_popup_replace_button = nullptr;
 HWND g_popup_header = nullptr;
 std::wstring g_last_clipboard_error;
+// Режим OCR: в попапе скрывается кнопка «Замена» (нет исходного окна).
+bool g_screen_ocr_mode = false;
 HMENU g_tray_history_popup = nullptr;
 std::vector<std::wstring> g_tray_history_items;
 std::vector<std::wstring> g_tray_history_labels;
@@ -500,8 +513,9 @@ std::vector<std::string> available_language_codes(
 }
 
 // Автоопределение языка текста: сначала настоящий детектор (whatlang через
-// fxbridge), при неудаче — определение по письму.
-std::string detect_source_language(
+// fxbridge), при неудаче — определение по письму. Пустой результат означает,
+// что язык определить не удалось.
+std::string detect_language_optional(
     const std::string& text,
     offline_translator::EngineKind engine_kind) {
     std::string detected = offline_translator::detect_language_code(
@@ -510,6 +524,13 @@ std::string detect_source_language(
     if (detected.empty()) {
         detected = offline_translator::detect_script_language(text);
     }
+    return detected;
+}
+
+std::string detect_source_language(
+    const std::string& text,
+    offline_translator::EngineKind engine_kind) {
+    std::string detected = detect_language_optional(text, engine_kind);
     if (detected.empty()) {
         detected = "en";
     }
@@ -1086,6 +1107,9 @@ void post_status(HWND window, const std::string& text) {
 void fill_language_combos() {
     SendMessageW(g_source_language_combo, CB_RESETCONTENT, 0, 0);
     SendMessageW(g_target_language_combo, CB_RESETCONTENT, 0, 0);
+    if (g_fallback_target_language_combo) {
+        SendMessageW(g_fallback_target_language_combo, CB_RESETCONTENT, 0, 0);
+    }
     // «Авто» только у языка источника, у цели автоопределение смысла не имеет.
     SendMessageW(
         g_source_language_combo,
@@ -1103,6 +1127,13 @@ void fill_language_combos() {
             CB_ADDSTRING,
             0,
             reinterpret_cast<LPARAM>(name.c_str()));
+        if (g_fallback_target_language_combo) {
+            SendMessageW(
+                g_fallback_target_language_combo,
+                CB_ADDSTRING,
+                0,
+                reinterpret_cast<LPARAM>(name.c_str()));
+        }
     }
 }
 
@@ -1121,6 +1152,12 @@ void apply_settings_to_ui(const offline_translator::AppSettings& settings) {
         g_target_language_combo,
         settings.target_language,
         language_count() > 1 ? 1 : 0);
+    if (g_fallback_target_language_combo) {
+        select_language(
+            g_fallback_target_language_combo,
+            settings.fallback_target_language,
+            language_count() > 0 ? 1 : 0);
+    }
 }
 
 void collect_window_size(HWND window, offline_translator::AppSettings& settings) {
@@ -1140,8 +1177,34 @@ offline_translator::AppSettings current_settings(HWND window) {
         ? std::string(kAutoSourceLanguage)
         : selected_source_language(g_source_language_combo);
     settings.target_language = selected_language(g_target_language_combo);
+    if (g_fallback_target_language_combo) {
+        settings.fallback_target_language =
+            selected_language(g_fallback_target_language_combo);
+    }
     collect_window_size(window, settings);
     return settings;
+}
+
+// Когда «С языка» = Авто и определённый язык совпал с выбранным «На язык»,
+// переводим на третий (настраиваемый) язык. Если он не задан или совпал с
+// целью — прежнее поведение (en↔ru).
+std::string resolve_fallback_target(
+    const std::string& source,
+    const std::string& target) {
+    std::string fallback;
+    if (g_fallback_target_language_combo) {
+        try {
+            fallback = selected_language(g_fallback_target_language_combo);
+        } catch (const std::exception&) {
+        }
+    }
+    if (fallback.empty() && g_runtime) {
+        fallback = g_runtime->settings.fallback_target_language;
+    }
+    if (fallback.empty() || fallback == target || fallback == source) {
+        return source == "en" ? "ru" : "en";
+    }
+    return fallback;
 }
 
 void persist_settings(HWND window) {
@@ -1162,6 +1225,7 @@ void set_main_busy(bool busy) {
     EnableWindow(g_engine_combo, !busy);
     EnableWindow(g_source_language_combo, !busy);
     EnableWindow(g_target_language_combo, !busy);
+    EnableWindow(g_fallback_target_language_combo, !busy);
     EnableWindow(g_packages_button, !busy);
 }
 
@@ -1172,7 +1236,11 @@ void layout_main(HWND window) {
     const int height = client.bottom - client.top;
     const int content_width = width - 32;
     const int status_top = height - 28;
-    const int result_top = 228;
+    // Вторая строка языков (третий комбобокс) видна только при «Авто»,
+    // поэтому контролы ниже сдвигаются вниз.
+    const int lang_shift =
+        (g_auto_source_language && g_fallback_target_language_combo) ? 30 : 0;
+    const int result_top = 228 + lang_shift;
     int result_height = status_top - result_top - 8;
     if (result_height < 60) {
         result_height = 60;
@@ -1202,9 +1270,29 @@ void layout_main(HWND window) {
             g_source_edit,
             nullptr,
             16,
-            84,
+            84 + lang_shift,
             content_width,
             90,
+            SWP_NOZORDER);
+    }
+    if (g_translate_button) {
+        SetWindowPos(
+            g_translate_button,
+            nullptr,
+            16,
+            186 + lang_shift,
+            120,
+            30,
+            SWP_NOZORDER);
+    }
+    if (g_screen_ocr_button) {
+        SetWindowPos(
+            g_screen_ocr_button,
+            nullptr,
+            144,
+            186 + lang_shift,
+            130,
+            30,
             SWP_NOZORDER);
     }
     if (g_result_edit) {
@@ -1229,6 +1317,28 @@ void layout_main(HWND window) {
     }
 }
 
+// Второй ряд языков виден только при «С языка» = Авто.
+void update_fallback_language_row(HWND window) {
+    const bool auto_source = g_auto_source_language;
+    const bool show =
+        auto_source && g_fallback_target_language_combo != nullptr;
+    if (g_fallback_target_label) {
+        ShowWindow(g_fallback_target_label, show ? SW_SHOW : SW_HIDE);
+    }
+    if (g_fallback_target_language_combo) {
+        ShowWindow(g_fallback_target_language_combo, show ? SW_SHOW : SW_HIDE);
+    }
+    // «Переводит в обоих направлениях» — только для двух конкретных языков.
+    if (g_both_directions_label) {
+        ShowWindow(
+            g_both_directions_label,
+            !auto_source ? SW_SHOW : SW_HIDE);
+    }
+    if (window && IsWindow(window)) {
+        layout_main(window);
+    }
+}
+
 void start_translation(HWND window) {
     if (!g_runtime || g_runtime->busy.exchange(true)) {
         offline_translator::app_log_warn(
@@ -1239,10 +1349,12 @@ void start_translation(HWND window) {
     const auto engine_kind = selected_engine();
     std::string source_language = selected_source_language(
         g_source_language_combo);
-    const std::string target_language = selected_language(
+    std::string target_language = selected_language(
         g_target_language_combo);
     const std::string text = to_utf8(source_text);
-    if (source_language == kAutoSourceLanguage) {
+    const bool auto_source = source_language == kAutoSourceLanguage;
+    const std::string combo_source = source_language;
+    if (auto_source) {
         // Автоопределение: детектор по тексту (с ограничением по доступным
         // языкам), при неудаче — по письму; список переключаем на найденный
         // язык, режим «Авто» при этом сохраняется.
@@ -1250,6 +1362,22 @@ void start_translation(HWND window) {
         select_source_language(g_source_language_combo, source_language);
         offline_translator::app_log_info(
             "автоопределение языка: " + source_language);
+        if (source_language == target_language) {
+            // Определённый язык совпал с «На язык» — переводим на третий язык.
+            target_language =
+                resolve_fallback_target(source_language, target_language);
+        }
+    } else {
+        // Ручной язык источника: если введён текст на языке «На язык»,
+        // меняем направление на язык источника (С=англ., На=рус., введён
+        // русский текст — переводим на английский).
+        const std::string detected =
+            detect_language_optional(text, engine_kind);
+        if (!detected.empty() && detected == target_language &&
+            combo_source != target_language) {
+            source_language = detected;
+            target_language = combo_source;
+        }
     }
     offline_translator::app_log_info(
         "перевод окна старт chars=" + std::to_string(text.size()) + " " +
@@ -2309,6 +2437,8 @@ const wchar_t* tray_menu_label(UINT id) {
             return L"Турбо перевод: сразу переводить выделенный текст";
         case kTrayCheckUpdate:
             return L"Проверить обновления";
+        case kTrayScreenOcr:
+            return L"Перевод области экрана";
         case kTrayExit:
             return L"Выход";
         case kTrayHistoryRoot:
@@ -2465,6 +2595,11 @@ void show_tray_menu(HWND window) {
         MF_OWNERDRAW,
         kTrayCheckUpdate,
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayCheckUpdate)));
+    AppendMenuW(
+        menu,
+        MF_OWNERDRAW,
+        kTrayScreenOcr,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayScreenOcr)));
     AppendMenuW(
         menu,
         MF_OWNERDRAW,
@@ -3001,7 +3136,8 @@ void show_result_popup(
         flat_button_subclass,
         1,
         0);
-    const bool show_replace = text.rfind(L"Ошибка:", 0) != 0;
+    const bool show_replace =
+        !g_screen_ocr_mode && text.rfind(L"Ошибка:", 0) != 0;
     g_popup_replace_button = nullptr;
     int next_left = copy_x;
     if (show_replace) {
@@ -3096,6 +3232,13 @@ std::pair<std::string, std::string> selection_translation_direction(
             const std::string source =
                 selected_source_language(g_source_language_combo);
             if (!source.empty() && source != kAutoSourceLanguage) {
+                // Если текст на языке «На язык» — меняем направление.
+                const std::string detected = detect_language_optional(
+                    to_utf8(text), selected_engine());
+                if (!detected.empty() && detected == window_target &&
+                    source != window_target) {
+                    return {detected, source};
+                }
                 return {source, window_target};
             }
         } catch (const std::exception&) {
@@ -3106,8 +3249,8 @@ std::pair<std::string, std::string> selection_translation_direction(
         detect_source_language(to_utf8(text), selected_engine());
     std::string target = window_target;
     if (source == target) {
-        // Направление совпало с целью: переводим в обратную сторону.
-        target = source == "en" ? "ru" : "en";
+        // Определённый язык совпал с «На язык»: переводим на третий язык.
+        target = resolve_fallback_target(source, target);
     }
     return {source, target};
 }
@@ -3178,6 +3321,171 @@ void start_selection_translation(HWND main_window) {
             0,
             reinterpret_cast<LPARAM>(result.release()));
     }).detach();
+}
+
+// Горячая клавиша перевода области экрана (Ctrl+Shift+S).
+constexpr std::string_view kScreenOcrHotkeySpec = "Ctrl+Shift+S";
+
+bool register_screen_ocr_hotkey(HWND window) {
+    UnregisterHotKey(window, kScreenOcrHotkey);
+    const auto parsed =
+        offline_translator::parse_hotkey(std::string(kScreenOcrHotkeySpec));
+    if (!parsed) {
+        return false;
+    }
+    return RegisterHotKey(
+               window,
+               kScreenOcrHotkey,
+               offline_translator::hotkey_win32_modifiers(*parsed),
+               parsed->vk) != FALSE;
+}
+
+// OCR области экрана: выделение → распознавание → существующий попап.
+void start_screen_ocr(HWND window) {
+    if (!g_runtime || g_runtime->selection_busy.exchange(true)) {
+        offline_translator::app_log_warn(
+            "перевод области пропущен: уже выполняется " + runtime_flags());
+        return;
+    }
+    // Язык распознавания — выбранный в окне; «Авто» — английский.
+    std::string ocr_language = "en";
+    try {
+        if (!g_auto_source_language && g_source_language_combo) {
+            const std::string source =
+                selected_source_language(g_source_language_combo);
+            if (!source.empty() && source != kAutoSourceLanguage) {
+                ocr_language = source;
+            }
+        }
+    } catch (const std::exception&) {
+    }
+    if (!offline_translator::tesseract_language_supported(ocr_language)) {
+        g_runtime->selection_busy = false;
+        const std::wstring message =
+            L"Язык «" +
+            from_utf8(offline_translator::language_store_name(ocr_language)) +
+            L"» не поддерживается распознаванием текста (OCR).";
+        localized_message_box(
+            window,
+            message.c_str(),
+            L"Перевод области экрана",
+            MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    const auto tessdata_root = offline_translator::default_tessdata_root();
+    if (!offline_translator::tessdata_installed(ocr_language, tessdata_root)) {
+        const std::wstring question =
+            L"Для распознавания текста нужны языковые данные OCR «" +
+            from_utf8(offline_translator::language_store_name(ocr_language)) +
+            L"» (примерно 1–8 МБ, скачиваются один раз).\n\n"
+            L"Скачать сейчас?";
+        const int answer = localized_message_box(
+            window,
+            question.c_str(),
+            L"Перевод области экрана",
+            MB_ICONQUESTION | MB_YESNO);
+        if (answer != IDYES) {
+            g_runtime->selection_busy = false;
+            return;
+        }
+        set_status(L"Скачивание языковых данных OCR…");
+        try {
+            offline_translator::download_tessdata(
+                ocr_language,
+                [window](
+                    std::uint64_t downloaded,
+                    std::uint64_t total,
+                    std::string_view) {
+                    const int percent = total > 0
+                        ? static_cast<int>(downloaded * 100 / total)
+                        : 0;
+                    set_status(
+                        L"Скачивание языковых данных OCR… " +
+                        std::to_wstring(percent) + L"%");
+                    MSG message{};
+                    while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) {
+                        TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
+                },
+                tessdata_root);
+        } catch (const std::exception& error) {
+            g_runtime->selection_busy = false;
+            const std::wstring message =
+                L"Не удалось скачать языковые данные OCR:\n" +
+                from_utf8(error.what());
+            localized_message_box(
+                window,
+                message.c_str(),
+                L"Перевод области экрана",
+                MB_ICONERROR | MB_OK);
+            return;
+        }
+    }
+
+    set_status(L"Выделите область экрана мышью (Esc — отмена)");
+    if (g_status_label) {
+        UpdateWindow(g_status_label);
+    }
+    // На время оверлея останавливаем опрос выделения, иначе он будет
+    // реагировать на собственную замороженную картинку.
+    if (!g_smoke_mode) {
+        KillTimer(window, kSelectionPollTimer);
+    }
+    std::wstring recognized;
+    try {
+        const auto image =
+            offline_translator::select_screen_region_image();
+        if (!g_smoke_mode) {
+            SetTimer(window, kSelectionPollTimer, 40, nullptr);
+        }
+        if (!image) {
+            g_runtime->selection_busy = false;
+            set_status(L"Отменено");
+            return;
+        }
+        offline_translator::OcrEngine engine(tessdata_root);
+        engine.initialize(ocr_language);
+        const auto ocr = engine.recognize(
+            image->bgra.data(),
+            image->width,
+            image->height,
+            image->width * 4,
+            4);
+        recognized = from_utf8(ocr.text);
+        while (!recognized.empty() &&
+               (recognized.back() == L' ' || recognized.back() == L'\n' ||
+                recognized.back() == L'\r')) {
+            recognized.pop_back();
+        }
+    } catch (const std::exception& error) {
+        g_runtime->selection_busy = false;
+        if (!g_smoke_mode) {
+            SetTimer(window, kSelectionPollTimer, 40, nullptr);
+        }
+        const std::wstring message =
+            L"Не удалось распознать текст:\n" + from_utf8(error.what());
+        localized_message_box(
+            window,
+            message.c_str(),
+            L"Перевод области экрана",
+            MB_ICONERROR | MB_OK);
+        return;
+    }
+    if (recognized.size() < 2) {
+        g_runtime->selection_busy = false;
+        set_status(L"Текст не распознан");
+        return;
+    }
+    g_selection.selected_text = recognized;
+    g_selection.replace_hwnd = nullptr;
+    g_screen_ocr_mode = true;
+    if (g_source_edit) {
+        SetWindowTextW(g_source_edit, recognized.c_str());
+    }
+    // start_selection_translation сам выставит selection_busy.
+    g_runtime->selection_busy = false;
+    start_selection_translation(window);
 }
 
 void capture_and_show_button(HWND main_window, int cursor_x, int cursor_y) {
@@ -3445,6 +3753,7 @@ void poll_selection(HWND main_window) {
 }
 
 void handle_translate_hotkey(HWND window) {
+    g_screen_ocr_mode = false;
     offline_translator::app_log_info("горячая клавиша перевода " + runtime_flags());
     for (int step = 0; step < 25; ++step) {
         if (!key_down(VK_CONTROL) && !key_down(VK_SHIFT) &&
@@ -4193,6 +4502,10 @@ void apply_settings_dialog(HWND settings_window) {
                 : selected_source_language(g_source_language_combo);
             settings.target_language =
                 selected_language(g_target_language_combo);
+            if (g_fallback_target_language_combo) {
+                settings.fallback_target_language =
+                    selected_language(g_fallback_target_language_combo);
+            }
             collect_window_size(g_runtime->main_window, settings);
         }
         if (!g_smoke_mode) {
@@ -5470,6 +5783,47 @@ void create_main_controls(HWND window) {
             static_cast<INT_PTR>(kTargetLanguageCombo)),
         nullptr,
         nullptr);
+    // Видна, когда выбраны два конкретных языка: перевод идёт в обе стороны.
+    // При «С языка» = Авто скрывается.
+    g_both_directions_label = CreateWindowW(
+        L"STATIC",
+        L"переводит в обоих направлениях",
+        WS_CHILD,
+        473,
+        52,
+        250,
+        20,
+        window,
+        nullptr,
+        nullptr,
+        nullptr);
+    // Вторая строка (появляется только при «С языка» = Авто): третий язык,
+    // на который переводим, если определённый язык совпал с «На язык».
+    g_fallback_target_label = CreateWindowW(
+        L"STATIC",
+        L"Если язык переводимого текста совпал с «На язык» — переводить на:",
+        WS_CHILD,
+        16,
+        84,
+        480,
+        20,
+        window,
+        nullptr,
+        nullptr,
+        nullptr);
+    g_fallback_target_language_combo = CreateWindowW(
+        L"COMBOBOX",
+        nullptr,
+        WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+        502,
+        80,
+        170,
+        420,
+        window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(kFallbackTargetCombo)),
+        nullptr,
+        nullptr);
     g_source_edit = CreateWindowW(
         L"EDIT",
         L"Hello world",
@@ -5493,6 +5847,18 @@ void create_main_controls(HWND window) {
         30,
         window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTranslateButton)),
+        nullptr,
+        nullptr);
+    g_screen_ocr_button = CreateWindowW(
+        L"BUTTON",
+        L"Область экрана",
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
+        144,
+        186,
+        130,
+        30,
+        window,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kScreenOcrButton)),
         nullptr,
         nullptr);
     g_result_edit = CreateWindowW(
@@ -5524,6 +5890,7 @@ void create_main_controls(HWND window) {
     store_runtime_settings(settings);
     apply_settings_to_ui(settings);
     layout_main(window);
+    update_fallback_language_row(window);
     if (g_packages_button) {
         SetWindowSubclass(g_packages_button, flat_button_subclass, 2, 0);
     }
@@ -5532,6 +5899,9 @@ void create_main_controls(HWND window) {
     }
     if (g_translate_button) {
         SetWindowSubclass(g_translate_button, flat_button_subclass, 2, 0);
+    }
+    if (g_screen_ocr_button) {
+        SetWindowSubclass(g_screen_ocr_button, flat_button_subclass, 2, 0);
     }
     apply_theme_to_window(window);
 }
@@ -6017,6 +6387,12 @@ LRESULT CALLBACK window_proc(
             return 0;
         }
         if (message == WM_COMMAND &&
+            LOWORD(w_param) == kScreenOcrButton &&
+            HIWORD(w_param) == BN_CLICKED) {
+            start_screen_ocr(window);
+            return 0;
+        }
+        if (message == WM_COMMAND &&
             LOWORD(w_param) == kPackagesButton &&
             HIWORD(w_param) == BN_CLICKED) {
             open_packages_window(
@@ -6088,6 +6464,10 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
                 start_update_check();
                 return 0;
             }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayScreenOcr) {
+            start_screen_ocr(window);
+            return 0;
+        }
         if (message == kUpdateCheckDoneMessage) {
             // Проверка была запущена из трея: показываем результат
             // всплывающим сообщением, а настройки открываем только когда
@@ -6193,6 +6573,8 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
                 combo = g_source_language_combo;
             } else if (id == kTargetLanguageCombo) {
                 combo = g_target_language_combo;
+            } else if (id == kFallbackTargetCombo) {
+                combo = g_fallback_target_language_combo;
             }
             if (combo) {
                 SendMessageW(combo, CB_SETTOPINDEX, 0, 0);
@@ -6201,7 +6583,8 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
         }
         if (message == WM_COMMAND &&
             (LOWORD(w_param) == kSourceLanguageCombo ||
-             LOWORD(w_param) == kTargetLanguageCombo) &&
+             LOWORD(w_param) == kTargetLanguageCombo ||
+             LOWORD(w_param) == kFallbackTargetCombo) &&
             HIWORD(w_param) == CBN_DROPDOWN) {
             // Список языков длинный, а Windows прокручивает его к выбранному
             // пункту: «Авто» и первые языки оставались невидимыми. Показываем
@@ -6218,12 +6601,14 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
         if (message == WM_COMMAND &&
             (LOWORD(w_param) == kEngineCombo ||
              LOWORD(w_param) == kSourceLanguageCombo ||
-             LOWORD(w_param) == kTargetLanguageCombo) &&
+             LOWORD(w_param) == kTargetLanguageCombo ||
+             LOWORD(w_param) == kFallbackTargetCombo) &&
             HIWORD(w_param) == CBN_SELCHANGE) {
             if (LOWORD(w_param) == kSourceLanguageCombo) {
                 g_auto_source_language =
                     selected_source_language(g_source_language_combo) ==
                     kAutoSourceLanguage;
+                update_fallback_language_row(window);
             }
             persist_settings(window);
             if (LOWORD(w_param) == kEngineCombo) {
@@ -6313,6 +6698,7 @@ if (message == kTranslateMessage) {
                 result->text,
                 direction.first,
                 direction.second);
+            g_screen_ocr_mode = false;
             if (result->failed) {
                 set_status(L"Ошибка перевода выделения");
                 // Нет модели для пары — предлагаем скачать её в «Пакетах»
@@ -6381,6 +6767,11 @@ if (message == kTranslateMessage) {
         if (message == WM_HOTKEY &&
             w_param == static_cast<WPARAM>(kShowWindowHotkey)) {
             handle_translate_hotkey(window);
+            return 0;
+        }
+        if (message == WM_HOTKEY &&
+            w_param == static_cast<WPARAM>(kScreenOcrHotkey)) {
+            start_screen_ocr(window);
             return 0;
         }
         if (message == WM_CLOSE) {
@@ -6653,6 +7044,19 @@ int WINAPI wWinMain(
     HINSTANCE,
     PWSTR command_line,
     int show_command) {
+    // Резкий текст в legacy-приложении без манифеста: GDI-масштабирование
+    // рендерит шрифты в реальном DPI, а не растягивает их bitmap-ом.
+    if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+        using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(void*);
+        const auto set_dpi =
+            reinterpret_cast<SetProcessDpiAwarenessContextFn>(
+                GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+        if (set_dpi != nullptr) {
+            // DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED == (HANDLE)-5.
+            set_dpi(reinterpret_cast<void*>(
+                static_cast<std::intptr_t>(-5)));
+        }
+    }
     g_smoke_mode = command_has_flag(command_line, L"--smoke-start") ||
         command_has_flag(GetCommandLineW(), L"--smoke-start");
     g_start_minimized =
@@ -6820,6 +7224,11 @@ int WINAPI wWinMain(
             warning.c_str(),
             L"Предупреждение",
             MB_ICONWARNING | MB_OK);
+    }
+    if (!g_smoke_mode && !register_screen_ocr_hotkey(window)) {
+        offline_translator::app_log_warn(
+            "не удалось зарегистрировать горячую клавишу перевода области " +
+            std::string(kScreenOcrHotkeySpec));
     }
     Gdiplus::GdiplusStartupInput gdiplus_input{};
     ULONG_PTR gdiplus_token = 0;

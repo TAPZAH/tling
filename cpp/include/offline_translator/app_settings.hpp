@@ -18,6 +18,9 @@ struct AppSettings {
     std::string engine{"argos"};
     std::string source_language{"en"};
     std::string target_language{"ru"};
+    // Язык перевода, когда «С языка» = Авто и определённый язык совпал с
+    // выбранным «На язык» (иначе получилось бы translate в тот же язык).
+    std::string fallback_target_language{"en"};
     int window_width{0};
     int window_height{0};
     bool popup_requires_ctrl{false};

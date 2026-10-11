@@ -13,6 +13,7 @@
 #include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/nllb_language.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
+#include "offline_translator/ocr_engine.hpp"
 #include "offline_translator/online_engine.hpp"
 #include "offline_translator/selection.hpp"
 #include "offline_translator/text_split.hpp"
@@ -40,6 +41,16 @@
 #include <zconf.h>
 #include <zlib.h>
 #include <zstd.h>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using namespace offline_translator;
 
@@ -1787,6 +1798,137 @@ int main() {
             "украинский код заменяется поддерживаемым языком");
         set_ui_language("ru");
         require(tr(L"Сохранить") == L"Сохранить", "возврат к русскому");
+    }
+
+    {
+        // OCR: маппинг языков приложения в коды Tesseract.
+        require(tesseract_language_code("en") == "eng", "OCR: en → eng");
+        require(tesseract_language_code("ru") == "rus", "OCR: ru → rus");
+        require(tesseract_language_code("zh") == "chi_sim", "OCR: zh → chi_sim");
+        require(tesseract_language_code("zt") == "chi_tra", "OCR: zt → chi_tra");
+        require(tesseract_language_code("he") == "heb", "OCR: he → heb");
+        require(tesseract_language_code("ro") == "ron", "OCR: ro → ron");
+        require(tesseract_language_code("pb") == "por", "OCR: pb → por");
+        require(tesseract_language_code("nb") == "nor", "OCR: nb → nor");
+        require(
+            tessdata_file_name("en") == "eng.traineddata",
+            "OCR: имя файла данных en");
+        require(
+            !tesseract_language_supported("zz"),
+            "OCR: неизвестный код не поддержан");
+        require(
+            !tesseract_language_supported("tl"),
+            "OCR: тагальский без данных Tesseract");
+        int supported = 0;
+        for (const auto& entry : supported_languages()) {
+            if (tesseract_language_supported(entry.code)) {
+                ++supported;
+            }
+        }
+        require(supported == 63, "OCR: 63 из 64 языков поддержаны");
+        bool unsupported_thrown = false;
+        try {
+            static_cast<void>(tesseract_language_code("tl"));
+        } catch (const std::runtime_error&) {
+            unsupported_thrown = true;
+        }
+        require(unsupported_thrown, "OCR: неподдержанный язык бросает");
+
+        // Ошибка без языковых данных: отдельный пустой каталог tessdata.
+        const auto empty_tessdata =
+            std::filesystem::temp_directory_path() / "offline-translator-ocr";
+        std::filesystem::remove_all(empty_tessdata);
+        std::filesystem::create_directories(empty_tessdata);
+        OcrEngine engine(empty_tessdata);
+        require(!engine.is_initialized(), "OCR: до initialize не готов");
+        require(!tessdata_installed("en", empty_tessdata), "OCR: данных нет");
+        bool missing_data_thrown = false;
+        try {
+            engine.initialize("en");
+        } catch (const std::runtime_error& error) {
+            missing_data_thrown =
+                std::string(error.what()).find("eng.traineddata") !=
+                std::string::npos;
+        }
+        require(
+            missing_data_thrown,
+            "OCR: без traineddata initialize называет файл данных");
+        bool not_ready_thrown = false;
+        try {
+            static_cast<void>(engine.recognize(nullptr, 0, 0, 0, 1));
+        } catch (const std::exception&) {
+            not_ready_thrown = true;
+        }
+        require(not_ready_thrown, "OCR: recognize без initialize бросает");
+        std::filesystem::remove_all(empty_tessdata);
+
+#ifdef _WIN32
+        // Распознавание синтетической картинки включается TLING_OCR_TEST,
+        // чтобы ctest не зависел от скачанных tessdata.
+        if (std::getenv("TLING_OCR_TEST") != nullptr) {
+            const auto tessdata_root = default_tessdata_root();
+            if (!tessdata_installed("en", tessdata_root)) {
+                std::cout << "OCR-тест пропущен: нет eng.traineddata в "
+                          << tessdata_root.string() << "\n";
+            } else {
+                constexpr int kWidth = 640;
+                constexpr int kHeight = 160;
+                HDC screen = ::GetDC(nullptr);
+                HDC memory_dc = ::CreateCompatibleDC(screen);
+                BITMAPINFO info{};
+                info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                info.bmiHeader.biWidth = kWidth;
+                info.bmiHeader.biHeight = -kHeight;  // сверху вниз
+                info.bmiHeader.biPlanes = 1;
+                info.bmiHeader.biBitCount = 32;
+                info.bmiHeader.biCompression = BI_RGB;
+                void* bits = nullptr;
+                HBITMAP bitmap = ::CreateDIBSection(
+                    memory_dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+                HGDIOBJ old_bitmap = ::SelectObject(memory_dc, bitmap);
+                RECT area{0, 0, kWidth, kHeight};
+                HBRUSH white = ::CreateSolidBrush(RGB(255, 255, 255));
+                ::FillRect(memory_dc, &area, white);
+                ::DeleteObject(white);
+                ::SetBkMode(memory_dc, TRANSPARENT);
+                ::SetTextColor(memory_dc, RGB(0, 0, 0));
+                HFONT font = ::CreateFontW(
+                    96, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
+                HGDIOBJ old_font = ::SelectObject(memory_dc, font);
+                const wchar_t* sample = L"HELLO WORLD";
+                ::TextOutW(
+                    memory_dc,
+                    20,
+                    20,
+                    sample,
+                    static_cast<int>(lstrlenW(sample)));
+                ::GdiFlush();
+
+                OcrEngine ocr(tessdata_root);
+                ocr.initialize("en");
+                const auto result = ocr.recognize(
+                    static_cast<const std::uint8_t*>(bits),
+                    kWidth,
+                    kHeight,
+                    kWidth * 4,
+                    4);
+                require(
+                    result.text.find("HELLO") != std::string::npos,
+                    "OCR: синтетическая картинка распознана");
+                std::cout << "OCR: \"" << result.text << "\" ("
+                          << result.confidence << "%)\n";
+
+                ::SelectObject(memory_dc, old_font);
+                ::DeleteObject(font);
+                ::SelectObject(memory_dc, old_bitmap);
+                ::DeleteObject(bitmap);
+                ::DeleteDC(memory_dc);
+                ::ReleaseDC(nullptr, screen);
+            }
+        }
+#endif
     }
 
     const auto user_nllb = NllbModelManager::default_models_root();

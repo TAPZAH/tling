@@ -1,12 +1,15 @@
 ﻿{
   "name": "tling-core",
-  "version-string": "0.99.7-beta",
+  "version-string": "0.99.8-beta",
   "dependencies": [
     {
       "name": "nlohmann-json"
     },
     {
       "name": "sentencepiece"
+    },
+    {
+      "name": "tesseract"
     },
     {
       "name": "zlib"

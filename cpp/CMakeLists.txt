@@ -14,6 +14,35 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(nlohmann_json CONFIG REQUIRED)
+
+# OCR выделенной области: Tesseract 5 (leptonica/curl/libarchive тянутся
+# транзитивно через его config).
+find_package(Tesseract CONFIG REQUIRED)
+if (TARGET Tesseract::libtesseract)
+    set(OT_TESSERACT_TARGET Tesseract::libtesseract)
+elseif (TARGET libtesseract)
+    set(OT_TESSERACT_TARGET libtesseract)
+else()
+    message(FATAL_ERROR "Не найден целевой объект Tesseract из find_package")
+endif()
+
+# Копирует runtime DLL Tesseract и всех его общих зависимостей рядом с целью.
+function(offline_translator_deploy_ocr_runtime target_name)
+    if (NOT WIN32)
+        return()
+    endif()
+    if (NOT TARGET "${target_name}")
+        return()
+    endif()
+    add_custom_command(TARGET "${target_name}" POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:${target_name}>
+            "$<TARGET_FILE_DIR:${target_name}>"
+        COMMAND_EXPAND_LISTS
+        COMMENT "Копирование runtime DLL OCR (Tesseract) рядом с ${target_name}"
+    )
+endfunction()
+
 option(ENABLE_CTRANSLATE2 "РџРѕРґРєР»СЋС‡РёС‚СЊ СЃРѕР±СЂР°РЅРЅС‹Р№ CTranslate2" OFF)
 set(CTranslate2_ROOT "" CACHE PATH "РљРѕСЂРµРЅСЊ РёСЃС…РѕРґРЅРёРєРѕРІ Рё СЃР±РѕСЂРєРё CTranslate2")
 set(CTranslate2_BUILD_DIR "" CACHE PATH "РљР°С‚Р°Р»РѕРі CMake-СЃР±РѕСЂРєРё CTranslate2")
@@ -102,6 +131,7 @@ add_library(offline_translator_core
     src/nllb_model_manager.cpp
     src/nllb_language.cpp
     src/nllb_engine.cpp
+    src/ocr_engine.cpp
     src/online_engine.cpp
     src/selection.cpp
     src/text_split.cpp
@@ -116,7 +146,7 @@ find_package(ZLIB REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 target_link_libraries(offline_translator_core
     PUBLIC nlohmann_json::nlohmann_json
-    PRIVATE ZLIB::ZLIB zstd::libzstd
+    PRIVATE ZLIB::ZLIB zstd::libzstd ${OT_TESSERACT_TARGET}
 )
 # DLL РґР»СЏ РґРµРїР»РѕСЏ: zlib РёР· РёРјРїРѕСЂС‚РЅРѕР№ С†РµР»Рё, zstd вЂ” РёРЅС‚РµСЂС„РµР№СЃРЅР°СЏ, РёС‰РµРј С„Р°Р№Р»РѕРј.
 set(_manifest_bin "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")
@@ -160,6 +190,7 @@ if (ENABLE_CTRANSLATE2)
     if (WIN32)
         add_executable(TLing WIN32
             app/win32_main.cpp
+            app/screen_ocr.cpp
             app/tling.rc
         )
     endif()
@@ -267,6 +298,7 @@ if (ENABLE_CTRANSLATE2)
                 comctl32
                 dwmapi
         )
+        offline_translator_deploy_ocr_runtime(TLing)
         set(_app_ico "${CMAKE_CURRENT_SOURCE_DIR}/../assets/app.ico")
         if (EXISTS "${_app_ico}")
             add_custom_command(TARGET TLing POST_BUILD
@@ -423,6 +455,8 @@ target_link_libraries(core_tests PRIVATE offline_translator_core ZLIB::ZLIB zstd
 target_link_libraries(integration_tests PRIVATE offline_translator_core)
 target_include_directories(core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+offline_translator_deploy_ocr_runtime(core_tests)
+offline_translator_deploy_ocr_runtime(integration_tests)
 # Тесты определения языка используют Rust-мост, поэтому fxbridge.dll нужен
 # и рядом с core_tests.
 if (WIN32 AND EXISTS "${_fxbridge_dll}")
