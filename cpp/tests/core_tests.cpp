@@ -1218,6 +1218,9 @@ int main() {
         require(
             missing.clipboard_history_limit == 10,
             "история по умолчанию 10");
+        require(
+            missing.check_updates_on_startup,
+            "проверка обновлений при запуске по умолчанию включена");
         fs_utils::write_text_file(
             path,
             "{\n  \"engine\": \"argos\",\n  \"architecture\": \"tiny\",\n"
@@ -1332,6 +1335,11 @@ int main() {
                 "ключ Google сохраняется");
         }
         loaded.engine = "argos";
+        loaded.check_updates_on_startup = false;
+        save_settings(path, loaded);
+        require(
+            !load_settings(path).check_updates_on_startup,
+            "check_updates_on_startup сохраняется выключенным");
         require(
             copy_roundtrip.clipboard_history_limit == 7,
             "clipboard_history_limit сохраняется");

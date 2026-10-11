@@ -42,6 +42,8 @@ struct AppSettings {
     bool turbo_translation{false};
     // Ключи онлайн-переводчиков (пусто — не задан).
     std::string google_api_key;
+    // Проверять обновления на GitHub при запуске (тихо, если их нет).
+    bool check_updates_on_startup{true};
     int clipboard_history_limit{10};
 };
 

@@ -235,6 +235,8 @@ AppSettings load_settings(const std::filesystem::path& path) {
             read_bool(data, "turbo_translation", false);
         settings.google_api_key =
             read_string(data, "google_api_key", std::string{});
+        settings.check_updates_on_startup =
+            read_bool(data, "check_updates_on_startup", true);
         settings.clipboard_history_limit = normalize_clipboard_history_limit(
             read_int(
                 data,
@@ -287,6 +289,7 @@ void save_settings(
     data["auto_copy_selection"] = settings.auto_copy_selection;
     data["turbo_translation"] = settings.turbo_translation;
     data["google_api_key"] = settings.google_api_key;
+    data["check_updates_on_startup"] = settings.check_updates_on_startup;
     data["clipboard_history_limit"] =
         normalize_clipboard_history_limit(settings.clipboard_history_limit);
     fs_utils::write_text_file(path, data.dump(2) + "\n");

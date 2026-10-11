@@ -72,8 +72,10 @@ constexpr UINT kRecoverInputMessage = WM_APP + 20;
 constexpr UINT kDropdownOpenedMessage = WM_APP + 24;
 constexpr UINT kUpdateCheckDoneMessage = WM_APP + 21;
 constexpr UINT kUpdateInstallDoneMessage = WM_APP + 22;
+constexpr UINT kStartupUpdateCheckDoneMessage = WM_APP + 23;
 constexpr UINT kSelectionPollTimer = 1;
 constexpr UINT kSelectionButtonHideTimer = 2;
+constexpr UINT kStartupUpdateTimer = 3;
 constexpr int kEngineCombo = 1001;
 constexpr int kSourceEdit = 1002;
 constexpr int kTranslateButton = 1003;
@@ -116,6 +118,7 @@ constexpr int kSettingsPackagesButton = 1226;
 constexpr int kSettingsEngineCombo = 1227;
 constexpr int kSettingsUiLanguage = 1228;
 constexpr int kSettingsGoogleKey = 1229;
+constexpr int kSettingsCheckUpdatesStartup = 1230;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
@@ -185,6 +188,7 @@ HWND g_settings_engine_combo = nullptr;
 HWND g_settings_behavior_summary = nullptr;
 HWND g_settings_ui_language = nullptr;
 HWND g_settings_google_key = nullptr;
+HWND g_settings_check_updates_startup = nullptr;
 std::atomic<bool> g_update_busy{false};
 std::optional<offline_translator::UpdateInfo> g_pending_update;
 HWND g_selection_button = nullptr;
@@ -4209,6 +4213,33 @@ void start_update_install() {
     }).detach();
 }
 
+// Тихая проверка обновлений после запуска: уведомляем только если есть
+// новая версия (при отсутствии обновлений ничего не показываем).
+void start_startup_update_check(HWND window) {
+    if (!g_runtime || g_update_busy) {
+        return;
+    }
+    std::thread([window]() {
+        auto* payload = new UpdateCheckPayload{};
+        try {
+            payload->info = offline_translator::check_for_update(
+                offline_translator::kAppVersion,
+                executable_path().parent_path());
+        } catch (const std::exception& error) {
+            payload->failed = true;
+            payload->text = from_utf8(error.what());
+        }
+        if (!window || !IsWindow(window) ||
+            !PostMessageW(
+                window,
+                kStartupUpdateCheckDoneMessage,
+                0,
+                reinterpret_cast<LPARAM>(payload))) {
+            delete payload;
+        }
+    }).detach();
+}
+
 LRESULT CALLBACK selection_button_proc_impl(
     HWND window,
     UINT message,
@@ -4489,6 +4520,14 @@ void apply_settings_dialog(HWND settings_window) {
         settings.google_api_key =
             trim_spaces(to_utf8(control_text(g_settings_google_key)));
     }
+    if (g_settings_check_updates_startup) {
+        settings.check_updates_on_startup =
+            SendMessageW(
+                g_settings_check_updates_startup,
+                BM_GETCHECK,
+                0,
+                0) == BST_CHECKED;
+    }
     if (g_runtime->main_window && g_engine_combo) {
         settings.engine =
             offline_translator::settings_engine_name(selected_engine());
@@ -4555,8 +4594,9 @@ void close_settings_window() {
     g_settings_save = nullptr;
     g_settings_cancel = nullptr;
     g_settings_engine_combo = nullptr;
-    g_settings_behavior_summary = nullptr;
-    g_settings_google_key = nullptr;
+        g_settings_behavior_summary = nullptr;
+        g_settings_google_key = nullptr;
+        g_settings_check_updates_startup = nullptr;
     for (int index = 0; index < 5; ++index) {
         g_settings_nav[index] = nullptr;
     }
@@ -5276,6 +5316,23 @@ LRESULT CALLBACK settings_proc_impl(
             160,
             28,
             kSettingsOpenReleases);
+        g_settings_check_updates_startup = content(
+            kSettingsPageAbout,
+            L"BUTTON",
+            L"Проверять обновления при запуске",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            274,
+            320,
+            24,
+            kSettingsCheckUpdatesStartup);
+        if (settings.check_updates_on_startup) {
+            SendMessageW(
+                g_settings_check_updates_startup,
+                BM_SETCHECK,
+                BST_CHECKED,
+                0);
+        }
         // ===== Кнопки фиксированной нижней панели =====
         g_settings_save = CreateWindowW(
             L"BUTTON",
@@ -6653,6 +6710,29 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             }
             return 0;
         }
+        if (message == kStartupUpdateCheckDoneMessage) {
+            std::unique_ptr<UpdateCheckPayload> payload(
+                reinterpret_cast<UpdateCheckPayload*>(l_param));
+            // Обновлений нет (или ошибка) — молча ничего не показываем.
+            if (payload->info) {
+                g_pending_update = payload->info;
+                const std::wstring question =
+                    L"Доступна новая версия " +
+                    from_utf8(payload->info->release.title) + L" (" +
+                    from_utf8(payload->info->release.tag) + L").\n\n"
+                    L"Скачать и установить сейчас?";
+                const int answer = localized_message_box(
+                    window,
+                    question.c_str(),
+                    L"Обновление TLing",
+                    MB_ICONQUESTION | MB_YESNO);
+                if (answer == IDYES) {
+                    set_status(L"Скачивание обновления…");
+                    start_update_install();
+                }
+            }
+            return 0;
+        }
 if (message == kTranslateMessage) {
             std::unique_ptr<StatusPayload> result(
                 reinterpret_cast<StatusPayload*>(l_param));
@@ -6762,6 +6842,14 @@ if (message == kTranslateMessage) {
         }
         if (message == WM_TIMER && w_param == kSelectionButtonHideTimer) {
             hide_selection_button();
+            return 0;
+        }
+        if (message == WM_TIMER && w_param == kStartupUpdateTimer) {
+            KillTimer(window, kStartupUpdateTimer);
+            if (!g_smoke_mode && g_runtime &&
+                g_runtime->settings.check_updates_on_startup) {
+                start_startup_update_check(window);
+            }
             return 0;
         }
         if (message == WM_HOTKEY &&
@@ -7267,6 +7355,10 @@ int WINAPI wWinMain(
         // окно обязано появиться, как при обычном двойном клике.
         ShowWindow(window, show_command == 0 ? SW_SHOWNORMAL : show_command);
         UpdateWindow(window);
+    }
+    if (!g_smoke_mode && settings.check_updates_on_startup) {
+        // Тихая проверка обновлений через несколько секунд после запуска.
+        SetTimer(window, kStartupUpdateTimer, 4000, nullptr);
     }
 
     MSG message{};
