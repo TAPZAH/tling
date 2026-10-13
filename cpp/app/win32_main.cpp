@@ -1941,23 +1941,23 @@ bool is_dark_theme() {
 UiTheme current_ui_theme() {
     if (is_dark_theme()) {
         return UiTheme{
-            RGB(0, 0, 0),
-            RGB(255, 255, 255),
-            RGB(255, 255, 255),
-            RGB(255, 255, 255),
-            RGB(42, 42, 42),
-            RGB(61, 61, 61),
-            RGB(255, 255, 255),
+            RGB(30, 30, 30),
+            RGB(72, 72, 72),
+            RGB(238, 238, 238),
+            RGB(238, 238, 238),
+            RGB(48, 48, 48),
+            RGB(66, 66, 66),
+            RGB(238, 238, 238),
         };
     }
     return UiTheme{
         RGB(255, 255, 255),
-        RGB(0, 0, 0),
-        RGB(0, 0, 0),
-        RGB(0, 0, 0),
-        RGB(230, 230, 230),
-        RGB(208, 208, 208),
-        RGB(0, 0, 0),
+        RGB(206, 206, 206),
+        RGB(24, 24, 24),
+        RGB(24, 24, 24),
+        RGB(245, 245, 245),
+        RGB(228, 228, 228),
+        RGB(24, 24, 24),
     };
 }
 
@@ -1975,20 +1975,182 @@ HBRUSH theme_background_brush() {
     return brush;
 }
 
+// Системный шрифт интерфейса (Segoe UI), уже с учётом DPI. Контролы,
+// созданные без WM_SETFONT, получают его при применении темы.
+HFONT ui_font() {
+    static HFONT font = nullptr;
+    if (font == nullptr) {
+        NONCLIENTMETRICSW metrics{};
+        metrics.cbSize = sizeof(metrics);
+        if (SystemParametersInfoW(
+                SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0)) {
+            font = CreateFontIndirectW(&metrics.lfMessageFont);
+        }
+        if (font == nullptr) {
+            font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        }
+    }
+    return font;
+}
+
+// Перерисовка выпадающего списка (CBS_OWNERDRAWFIXED) в цветах темы:
+// иначе стандартный комбобокс всегда светлый и выбивается из тёмной темы.
+void draw_owner_combo(const DRAWITEMSTRUCT& draw) {
+    const UiTheme theme = current_ui_theme();
+    const bool selected = (draw.itemState & ODS_SELECTED) != 0;
+    HBRUSH brush =
+        CreateSolidBrush(selected ? theme.button_hover : theme.background);
+    FillRect(draw.hDC, &draw.rcItem, brush);
+    DeleteObject(brush);
+    SetBkMode(draw.hDC, TRANSPARENT);
+    SetTextColor(draw.hDC, theme.text);
+    if (draw.hwndItem != nullptr) {
+        SelectObject(draw.hDC, ui_font());
+    }
+    std::wstring text;
+    const LRESULT index = (draw.itemState & ODS_COMBOBOXEDIT) != 0
+        ? SendMessageW(draw.hwndItem, CB_GETCURSEL, 0, 0)
+        : static_cast<LRESULT>(draw.itemID);
+    if (draw.hwndItem != nullptr && index >= 0 &&
+        index != static_cast<LRESULT>(CB_ERR)) {
+        const LRESULT length =
+            SendMessageW(draw.hwndItem, CB_GETLBTEXTLEN, index, 0);
+        if (length > 0) {
+            text.resize(static_cast<std::size_t>(length));
+            SendMessageW(
+                draw.hwndItem,
+                CB_GETLBTEXT,
+                index,
+                reinterpret_cast<LPARAM>(text.data()));
+        }
+    }
+    RECT text_rect = draw.rcItem;
+    text_rect.left += 7;
+    text_rect.right -= 6;
+    DrawTextW(
+        draw.hDC,
+        text.c_str(),
+        -1,
+        &text_rect,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+    // Рамку рисуем только у закрытого поля, не у пунктов списка.
+    if ((draw.itemState & ODS_COMBOBOXEDIT) != 0) {
+        HBRUSH frame = CreateSolidBrush(theme.border);
+        RECT border = draw.rcItem;
+        FrameRect(draw.hDC, &border, frame);
+        DeleteObject(frame);
+    }
+}
+
+void measure_owner_combo(MEASUREITEMSTRUCT* measure) {
+    if (measure == nullptr) {
+        return;
+    }
+    HDC dc = GetDC(nullptr);
+    const HFONT old = static_cast<HFONT>(SelectObject(dc, ui_font()));
+    TEXTMETRICW metrics{};
+    GetTextMetricsW(dc, &metrics);
+    SelectObject(dc, old);
+    ReleaseDC(nullptr, dc);
+    measure->itemHeight = static_cast<UINT>(metrics.tmHeight + 8);
+}
+
+// Плоская кнопка в цветах темы (для кнопок настроек и «Пакетов»).
+void draw_flat_button(const DRAWITEMSTRUCT& draw) {
+    const UiTheme theme = current_ui_theme();
+    HBRUSH brush = CreateSolidBrush(theme.button_face);
+    FillRect(draw.hDC, &draw.rcItem, brush);
+    DeleteObject(brush);
+    SetBkMode(draw.hDC, TRANSPARENT);
+    SetTextColor(
+        draw.hDC,
+        (draw.itemState & ODS_DISABLED) != 0
+            ? (is_dark_theme() ? RGB(120, 120, 120) : RGB(165, 165, 165))
+            : theme.button_text);
+    if (draw.hwndItem != nullptr) {
+        SelectObject(draw.hDC, ui_font());
+    }
+    wchar_t label[128]{};
+    if (draw.hwndItem != nullptr) {
+        GetWindowTextW(draw.hwndItem, label, 128);
+    }
+    RECT text_rect = draw.rcItem;
+    DrawTextW(
+        draw.hDC,
+        label,
+        -1,
+        &text_rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    HBRUSH frame = CreateSolidBrush(theme.border);
+    RECT border = draw.rcItem;
+    FrameRect(draw.hDC, &border, frame);
+    DeleteObject(frame);
+}
+
 BOOL CALLBACK apply_theme_to_child(HWND child, LPARAM) {
     SetWindowTheme(child, L"", L"");
+    if (SendMessageW(child, WM_GETFONT, 0, 0) == 0) {
+        SendMessageW(
+            child,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(ui_font()),
+            TRUE);
+    }
     return TRUE;
+}
+
+// Номер сборки Windows без манифеста (RtlGetVersion не врёт, в отличие от
+// GetVersion/GetVersionEx).
+DWORD windows_build_number() {
+    struct OsVersionInfo {
+        ULONG dwOSVersionInfoSize;
+        ULONG dwMajorVersion;
+        ULONG dwMinorVersion;
+        ULONG dwBuildNumber;
+        ULONG dwPlatformId;
+        WCHAR szCSDVersion[128];
+    };
+    using RtlGetVersionFn = LONG(WINAPI*)(OsVersionInfo*);
+    static const DWORD build = []() -> DWORD {
+        const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        if (ntdll != nullptr) {
+            const auto fn = reinterpret_cast<RtlGetVersionFn>(
+                GetProcAddress(ntdll, "RtlGetVersion"));
+            if (fn != nullptr) {
+                OsVersionInfo info{};
+                info.dwOSVersionInfoSize =
+                    static_cast<ULONG>(sizeof(OsVersionInfo));
+                if (fn(&info) == 0) {
+                    return static_cast<DWORD>(info.dwBuildNumber);
+                }
+            }
+        }
+        return 0;
+    }();
+    return build;
 }
 
 void apply_dark_title_bar(HWND window) {
     if (!window || !IsWindow(window)) {
         return;
     }
-    // Тёмный заголовок окна в тёмной теме (Windows 10 1809+).
-    const BOOL dark = is_dark_theme() ? TRUE : FALSE;
-    if (FAILED(DwmSetWindowAttribute(
-            window, 20, &dark, sizeof(dark)))) {
-        DwmSetWindowAttribute(window, 19, &dark, sizeof(dark));
+    const DWORD build = windows_build_number();
+    // Тёмный/светлый заголовок: 19 — Windows 10 1809–1903, 20 — 2004+ и 11.
+    if (build >= 17763) {
+        BOOL dark = is_dark_theme() ? TRUE : FALSE;
+        const DWORD attribute = build >= 18985 ? 20 : 19;
+        DwmSetWindowAttribute(window, attribute, &dark, sizeof(dark));
+    }
+    // Windows 11: точные цвета заголовка, текста и рамки под тему
+    // (на более старых версиях заголовок следует тёмному/светлому режиму).
+    if (build >= 22000) {
+        const UiTheme theme = current_ui_theme();
+        COLORREF caption = theme.background;
+        COLORREF caption_text = theme.text;
+        COLORREF border = theme.border;
+        DwmSetWindowAttribute(window, 34, &border, sizeof(border));
+        DwmSetWindowAttribute(window, 35, &caption, sizeof(caption));
+        DwmSetWindowAttribute(window, 36, &caption_text, sizeof(caption_text));
     }
 }
 
@@ -1996,15 +2158,27 @@ void apply_theme_to_window(HWND window) {
     if (!window || !IsWindow(window)) {
         return;
     }
-    SetWindowTheme(window, L"", L"");
+    // Только дочерние контролы: им пустая тема нужна, чтобы работали
+    // WM_CTLCOLOR-цвета. Верхнеуровневое окно НЕ трогаем — иначе DWM
+    // перестаёт применять тёмный/светлый цвет заголовка.
     EnumChildWindows(window, apply_theme_to_child, 0);
     apply_dark_title_bar(window);
+    SetWindowPos(
+        window,
+        nullptr,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+            SWP_FRAMECHANGED);
     InvalidateRect(window, nullptr, TRUE);
     RedrawWindow(
         window,
         nullptr,
         nullptr,
-        RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
+        RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN |
+            RDW_UPDATENOW);
 }
 
 void apply_live_theme() {
@@ -4639,12 +4813,31 @@ LRESULT CALLBACK settings_panel_proc_impl(
             theme_background_brush());
         return 1;
     }
-    if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT) {
+    if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT ||
+        message == WM_CTLCOLORLISTBOX) {
         const HDC dc = reinterpret_cast<HDC>(w_param);
         const UiTheme theme = current_ui_theme();
         SetBkColor(dc, theme.background);
         SetTextColor(dc, theme.text);
         return reinterpret_cast<LRESULT>(theme_background_brush());
+    }
+    if (message == WM_MEASUREITEM) {
+        auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(l_param);
+        if (measure && measure->CtlType == ODT_COMBOBOX) {
+            measure_owner_combo(measure);
+            return TRUE;
+        }
+    }
+    if (message == WM_DRAWITEM) {
+        auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
+        if (draw && draw->CtlType == ODT_COMBOBOX) {
+            draw_owner_combo(*draw);
+            return TRUE;
+        }
+        if (draw && draw->CtlType == ODT_BUTTON) {
+            draw_flat_button(*draw);
+            return TRUE;
+        }
     }
     if (message == WM_COMMAND) {
         const HWND settings = GetParent(window);
@@ -4761,7 +4954,7 @@ LRESULT CALLBACK settings_proc_impl(
             kSettingsPageLanguages,
             L"COMBOBOX",
             nullptr,
-            CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
             16,
             46,
             260,
@@ -4812,7 +5005,7 @@ LRESULT CALLBACK settings_proc_impl(
             kSettingsPageLanguages,
             L"BUTTON",
             L"Пакеты моделей…",
-            BS_PUSHBUTTON | WS_TABSTOP,
+            BS_OWNERDRAW | WS_TABSTOP,
             16,
             128,
             180,
@@ -4918,7 +5111,7 @@ LRESULT CALLBACK settings_proc_impl(
             kSettingsPageBehavior,
             L"COMBOBOX",
             nullptr,
-            CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
             16,
             216,
             240,
@@ -5181,7 +5374,7 @@ LRESULT CALLBACK settings_proc_impl(
             kSettingsPageLanguage,
             L"COMBOBOX",
             nullptr,
-            CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
             16,
             52,
             240,
@@ -5290,7 +5483,7 @@ LRESULT CALLBACK settings_proc_impl(
             kSettingsPageAbout,
             L"BUTTON",
             L"Проверить обновления",
-            BS_PUSHBUTTON | WS_TABSTOP,
+            BS_OWNERDRAW | WS_TABSTOP,
             16,
             202,
             180,
@@ -5300,7 +5493,7 @@ LRESULT CALLBACK settings_proc_impl(
             kSettingsPageAbout,
             L"BUTTON",
             L"Скачать и установить",
-            BS_PUSHBUTTON | WS_DISABLED | WS_TABSTOP,
+            BS_OWNERDRAW | WS_DISABLED | WS_TABSTOP,
             204,
             202,
             170,
@@ -5310,7 +5503,7 @@ LRESULT CALLBACK settings_proc_impl(
             kSettingsPageAbout,
             L"BUTTON",
             L"Страница релизов",
-            BS_PUSHBUTTON | WS_TABSTOP,
+            BS_OWNERDRAW | WS_TABSTOP,
             16,
             238,
             160,
@@ -5337,7 +5530,7 @@ LRESULT CALLBACK settings_proc_impl(
         g_settings_save = CreateWindowW(
             L"BUTTON",
             L"Сохранить",
-            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
             248,
             660,
             118,
@@ -5349,7 +5542,7 @@ LRESULT CALLBACK settings_proc_impl(
         g_settings_cancel = CreateWindowW(
             L"BUTTON",
             L"Отмена",
-            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
             372,
             660,
             118,
@@ -5458,7 +5651,8 @@ LRESULT CALLBACK settings_proc_impl(
                 }
             }
             if (index < 0) {
-                return DefWindowProcW(window, message, w_param, l_param);
+                draw_flat_button(*draw);
+                return TRUE;
             }
             const bool dark = is_dark_theme();
             const COLORREF sidebar = dark ? RGB(40, 40, 46) : RGB(233, 233, 233);
@@ -5732,7 +5926,7 @@ void create_main_controls(HWND window) {
     g_engine_combo = CreateWindowW(
         L"COMBOBOX",
         nullptr,
-        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
         90,
         12,
         155,
@@ -5806,7 +6000,7 @@ void create_main_controls(HWND window) {
     g_source_language_combo = CreateWindowW(
         L"COMBOBOX",
         nullptr,
-        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
         90,
         48,
         150,
@@ -5830,7 +6024,7 @@ void create_main_controls(HWND window) {
     g_target_language_combo = CreateWindowW(
         L"COMBOBOX",
         nullptr,
-        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
         335,
         48,
         130,
@@ -5871,7 +6065,7 @@ void create_main_controls(HWND window) {
     g_fallback_target_language_combo = CreateWindowW(
         L"COMBOBOX",
         nullptr,
-        WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+        WS_CHILD | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
         502,
         80,
         170,
@@ -6055,7 +6249,7 @@ LRESULT CALLBACK packages_proc(
             g_package_arch_combo = CreateWindowW(
                 L"COMBOBOX",
                 nullptr,
-                WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+                WS_CHILD | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP,
                 302,
                 11,
                 148,
@@ -6097,7 +6291,7 @@ LRESULT CALLBACK packages_proc(
             g_package_install = CreateWindowW(
                 L"BUTTON",
                 L"Установить",
-                WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
                 16,
                 306,
                 120,
@@ -6110,7 +6304,7 @@ LRESULT CALLBACK packages_proc(
             g_package_uninstall = CreateWindowW(
                 L"BUTTON",
                 L"Удалить",
-                WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
                 148,
                 306,
                 120,
@@ -6123,7 +6317,7 @@ LRESULT CALLBACK packages_proc(
             CreateWindowW(
                 L"BUTTON",
                 L"Закрыть",
-                WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
                 346,
                 306,
                 120,
@@ -6179,6 +6373,24 @@ LRESULT CALLBACK packages_proc(
         if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT ||
             message == WM_CTLCOLORLISTBOX || message == WM_CTLCOLORBTN) {
             return theme_control_color(w_param, l_param);
+        }
+        if (message == WM_MEASUREITEM) {
+            auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(l_param);
+            if (measure && measure->CtlType == ODT_COMBOBOX) {
+                measure_owner_combo(measure);
+                return TRUE;
+            }
+        }
+        if (message == WM_DRAWITEM) {
+            auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
+            if (draw && draw->CtlType == ODT_COMBOBOX) {
+                draw_owner_combo(*draw);
+                return TRUE;
+            }
+            if (draw && draw->CtlType == ODT_BUTTON) {
+                draw_flat_button(*draw);
+                return TRUE;
+            }
         }
         if (message == kPackageIndexMessage) {
             std::unique_ptr<StatusPayload> payload(
@@ -6348,6 +6560,9 @@ LRESULT CALLBACK window_proc(
             }
             return 0;
         }
+        if (message == WM_ACTIVATE) {
+            apply_dark_title_bar(window);
+        }
         if (message == WM_SIZE) {
             layout_main(window);
             return 0;
@@ -6367,6 +6582,10 @@ LRESULT CALLBACK window_proc(
             if (measure && measure->CtlType == ODT_MENU) {
                 measure->itemWidth = 240;
                 measure->itemHeight = 26;
+                return TRUE;
+            }
+            if (measure && measure->CtlType == ODT_COMBOBOX) {
+                measure_owner_combo(measure);
                 return TRUE;
             }
         }
@@ -6403,6 +6622,10 @@ LRESULT CALLBACK window_proc(
                     -1,
                     &draw->rcItem,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                return TRUE;
+            }
+            if (draw && draw->CtlType == ODT_COMBOBOX) {
+                draw_owner_combo(*draw);
                 return TRUE;
             }
             if (draw && draw->CtlType == ODT_MENU) {
@@ -7360,6 +7583,7 @@ int WINAPI wWinMain(
         // Тихая проверка обновлений через несколько секунд после запуска.
         SetTimer(window, kStartupUpdateTimer, 4000, nullptr);
     }
+    apply_dark_title_bar(window);
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
