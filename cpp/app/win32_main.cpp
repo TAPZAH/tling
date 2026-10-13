@@ -1,4 +1,4 @@
-﻿#include "offline_translator/app_log.hpp"
+#include "offline_translator/app_log.hpp"
 #include "offline_translator/app_language.hpp"
 #include "offline_translator/app_settings.hpp"
 #include "offline_translator/app_update.hpp"
@@ -7,6 +7,9 @@
 #include "offline_translator/autostart.hpp"
 #include "offline_translator/clipboard.hpp"
 #include "offline_translator/clipboard_history.hpp"
+#include "offline_translator/document_export.hpp"
+#include "offline_translator/document_layout.hpp"
+#include "offline_translator/excel_cells.hpp"
 #include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
@@ -20,6 +23,8 @@
 #include "offline_translator/window_policy.hpp"
 
 #include "screen_ocr.hpp"
+#include "excel_com.hpp"
+#include "image_file.hpp"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -73,6 +78,8 @@ constexpr UINT kDropdownOpenedMessage = WM_APP + 24;
 constexpr UINT kUpdateCheckDoneMessage = WM_APP + 21;
 constexpr UINT kUpdateInstallDoneMessage = WM_APP + 22;
 constexpr UINT kStartupUpdateCheckDoneMessage = WM_APP + 23;
+constexpr UINT kExcelResultMessage = WM_APP + 25;
+constexpr UINT kImageResultMessage = WM_APP + 26;
 constexpr UINT kSelectionPollTimer = 1;
 constexpr UINT kSelectionButtonHideTimer = 2;
 constexpr UINT kStartupUpdateTimer = 3;
@@ -97,7 +104,6 @@ constexpr int kSettingsDoubleCtrlC = 1202;
 constexpr int kSettingsClickToClose = 1203;
 constexpr int kSettingsSelectable = 1204;
 constexpr int kSettingsAutostart = 1205;
-constexpr int kSettingsHotkeyEdit = 1206;
 constexpr int kSettingsSave = 1207;
 constexpr int kSettingsCancel = 1208;
 constexpr int kSettingsPopupModifier = 1209;
@@ -119,12 +125,21 @@ constexpr int kSettingsEngineCombo = 1227;
 constexpr int kSettingsUiLanguage = 1228;
 constexpr int kSettingsGoogleKey = 1229;
 constexpr int kSettingsCheckUpdatesStartup = 1230;
+constexpr int kSettingsAppendSeparator = 1231;
+constexpr int kSettingsExcelEnabled = 1232;
+constexpr int kSettingsExcelHotkey = 1233;
+constexpr int kSettingsExcelMethod = 1234;
+constexpr int kSettingsExcelTrigger = 1235;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
+constexpr int kResultAddButton = 1305;
+constexpr int kUpdateYesButton = 1401;
+constexpr int kUpdateNoButton = 1402;
 constexpr int kScreenOcrButton = 1010;
-constexpr int kShowWindowHotkey = 2001;
+constexpr int kImageButton = 1012;
 constexpr int kScreenOcrHotkey = 2002;
+constexpr int kExcelHotkey = 2003;
 constexpr int kTrayOpen = 3001;
 constexpr int kTrayAutostart = 3002;
 constexpr int kTrayExit = 3003;
@@ -132,6 +147,9 @@ constexpr int kTrayCheckUpdate = 3004;
 constexpr int kTrayAutoCopy = 3005;
 constexpr int kTrayTurbo = 3006;
 constexpr int kTrayScreenOcr = 3007;
+constexpr int kTrayImageFile = 3008;
+constexpr int kTrayImageRegion = 3009;
+constexpr int kTrayFloatButton = 3010;
 constexpr int kTrayHistoryRoot = 3097;
 constexpr int kTrayHistoryEmpty = 3098;
 constexpr int kTrayHistoryClear = 3099;
@@ -149,6 +167,10 @@ HWND g_engine_combo = nullptr;
 HWND g_source_edit = nullptr;
 HWND g_translate_button = nullptr;
 HWND g_screen_ocr_button = nullptr;
+HWND g_image_button = nullptr;
+HWND g_float_button = nullptr;
+HWND g_float_tooltip = nullptr;
+bool g_float_button_uses_icon = false;
 HWND g_result_edit = nullptr;
 HWND g_source_language_combo = nullptr;
 HWND g_target_language_combo = nullptr;
@@ -175,7 +197,6 @@ HWND g_settings_double_ctrl_c = nullptr;
 HWND g_settings_click_to_close = nullptr;
 HWND g_settings_selectable = nullptr;
 HWND g_settings_autostart = nullptr;
-HWND g_settings_hotkey_edit = nullptr;
 HWND g_settings_theme_light = nullptr;
 HWND g_settings_theme_dark = nullptr;
 HWND g_settings_auto_copy = nullptr;
@@ -189,6 +210,12 @@ HWND g_settings_behavior_summary = nullptr;
 HWND g_settings_ui_language = nullptr;
 HWND g_settings_google_key = nullptr;
 HWND g_settings_check_updates_startup = nullptr;
+HWND g_settings_append_separator = nullptr;
+HWND g_settings_excel_enabled = nullptr;
+HWND g_settings_excel_hotkey = nullptr;
+HWND g_settings_excel_method = nullptr;
+HWND g_settings_excel_trigger = nullptr;
+std::wstring g_hotkey_capture_backup;
 std::atomic<bool> g_update_busy{false};
 std::optional<offline_translator::UpdateInfo> g_pending_update;
 HWND g_selection_button = nullptr;
@@ -196,7 +223,14 @@ HWND g_result_popup = nullptr;
 HWND g_popup_result_edit = nullptr;
 HWND g_popup_copy_button = nullptr;
 HWND g_popup_replace_button = nullptr;
+HWND g_popup_add_button = nullptr;
 HWND g_popup_header = nullptr;
+std::wstring g_popup_source_text;
+HWND g_update_popup = nullptr;
+HWND g_update_popup_text = nullptr;
+HWND g_update_popup_yes = nullptr;
+HWND g_update_popup_no = nullptr;
+bool g_update_popup_disabled_owner = false;
 std::wstring g_last_clipboard_error;
 // Режим OCR: в попапе скрывается кнопка «Замена» (нет исходного окна).
 bool g_screen_ocr_mode = false;
@@ -247,6 +281,11 @@ struct UpdateInstallPayload {
 };
 
 void sel_log(const std::string& line);
+void hide_update_popup();
+void show_tray_balloon(
+    const std::wstring& title,
+    const std::wstring& text,
+    bool warning);
 // Онлайн-движок (Google) не использует модели.
 bool is_online_engine(offline_translator::EngineKind kind);
 std::string runtime_flags();
@@ -275,6 +314,8 @@ struct GuiRuntime {
     std::atomic<bool> closing{false};
     std::atomic<bool> packages_busy{false};
     std::atomic<bool> selection_busy{false};
+    std::atomic<bool> excel_busy{false};
+    std::atomic<bool> image_busy{false};
     HWND main_window{nullptr};
     HWND packages_window{nullptr};
     HWND settings_window{nullptr};
@@ -694,6 +735,37 @@ void replace_source_with_translation(HWND owner, const std::wstring& text) {
     }
 }
 
+std::wstring trim_trailing_whitespace(std::wstring text) {
+    while (!text.empty() &&
+           (text.back() == L' ' || text.back() == L'\n' ||
+            text.back() == L'\r' || text.back() == L'\t')) {
+        text.pop_back();
+    }
+    return text;
+}
+
+// «Добавить»: к оригиналу приписывается перевод через выбранный в
+// настройках разделитель, готовый текст вставляется поверх выделения —
+// так же, как «Замена».
+void add_source_with_translation(
+    HWND owner,
+    const std::wstring& original,
+    const std::wstring& translation,
+    const std::wstring& separator) {
+    if (translation.empty() || translation.rfind(L"Ошибка:", 0) == 0) {
+        return;
+    }
+    std::wstring combined = trim_trailing_whitespace(original);
+    if (combined.empty()) {
+        return;
+    }
+    combined += separator;
+    combined += translation;
+    offline_translator::app_log_info(
+        "add: len=" + std::to_string(combined.size()));
+    replace_source_with_translation(owner, combined);
+}
+
 double monotonic_seconds() {
     using clock = std::chrono::steady_clock;
     static const auto epoch = clock::now();
@@ -737,6 +809,29 @@ void fill_popup_modifier_combo(HWND combo, std::string_view selected) {
         combo,
         CB_SETCURSEL,
         popup_modifier_combo_index(selected),
+        0);
+}
+
+int append_separator_combo_index(std::string_view separator) {
+    return separator == offline_translator::kAppendSeparatorDash ? 1 : 0;
+}
+
+std::string append_separator_from_combo(HWND combo) {
+    const LRESULT index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (index == 1) {
+        return std::string{offline_translator::kAppendSeparatorDash};
+    }
+    return std::string{offline_translator::kAppendSeparatorSlash};
+}
+
+void fill_append_separator_combo(HWND combo, std::string_view selected) {
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L" / "));
+    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L" - "));
+    SendMessageW(
+        combo,
+        CB_SETCURSEL,
+        append_separator_combo_index(selected),
         0);
 }
 
@@ -1185,13 +1280,20 @@ offline_translator::AppSettings current_settings(HWND window) {
         settings.fallback_target_language =
             selected_language(g_fallback_target_language_combo);
     }
+    if (g_float_button && IsWindow(g_float_button)) {
+        RECT float_bounds{};
+        if (GetWindowRect(g_float_button, &float_bounds)) {
+            settings.image_float_button_x = float_bounds.left;
+            settings.image_float_button_y = float_bounds.top;
+        }
+    }
     collect_window_size(window, settings);
     return settings;
 }
 
 // Когда «С языка» = Авто и определённый язык совпал с выбранным «На язык»,
 // переводим на третий (настраиваемый) язык. Если он не задан или совпал с
-// целью — прежнее поведение (en↔ru).
+// целью — прежнее поведение (en-ru).
 std::string resolve_fallback_target(
     const std::string& source,
     const std::string& target) {
@@ -1299,6 +1401,16 @@ void layout_main(HWND window) {
             30,
             SWP_NOZORDER);
     }
+    if (g_image_button) {
+        SetWindowPos(
+            g_image_button,
+            nullptr,
+            282,
+            186 + lang_shift,
+            130,
+            30,
+            SWP_NOZORDER);
+    }
     if (g_result_edit) {
         SetWindowPos(
             g_result_edit,
@@ -1385,7 +1497,7 @@ void start_translation(HWND window) {
     }
     offline_translator::app_log_info(
         "перевод окна старт chars=" + std::to_string(text.size()) + " " +
-        source_language + "→" + target_language + " " + runtime_flags());
+        source_language + ">" + target_language + " " + runtime_flags());
     const auto root = model_root_for_kind(engine_kind);
     const std::string engine_variant =
         engine_kind == offline_translator::EngineKind::firefox
@@ -2399,7 +2511,7 @@ void fill_clickable_disk(Gdiplus::BitmapData& data, int alpha_limit) {
     }
 }
 
-// Готовит 40×40 premultiplied-DIB из тематической PNG для
+// Готовит 40?40 premultiplied-DIB из тематической PNG для
 // UpdateLayeredWindow. Возвращает true, если иконка загружена.
 bool compose_selection_icon_bitmap(HBITMAP* out_bitmap) {
     *out_bitmap = nullptr;
@@ -2587,20 +2699,9 @@ void destroy_popup_windows() {
         g_popup_result_edit = nullptr;
         g_popup_copy_button = nullptr;
         g_popup_replace_button = nullptr;
+        g_popup_add_button = nullptr;
     }
-}
-
-bool register_translate_hotkey(HWND window, const std::string& spec) {
-    UnregisterHotKey(window, kShowWindowHotkey);
-    const auto parsed = offline_translator::parse_hotkey(spec);
-    if (!parsed) {
-        return false;
-    }
-    return RegisterHotKey(
-               window,
-               kShowWindowHotkey,
-               offline_translator::hotkey_win32_modifiers(*parsed),
-               parsed->vk) != FALSE;
+    hide_update_popup();
 }
 
 const wchar_t* tray_menu_label(UINT id) {
@@ -2617,6 +2718,12 @@ const wchar_t* tray_menu_label(UINT id) {
             return L"Проверить обновления";
         case kTrayScreenOcr:
             return L"Перевод области экрана";
+        case kTrayImageFile:
+            return L"Перевести изображение…";
+        case kTrayImageRegion:
+            return L"Область экрана → Word/Excel";
+        case kTrayFloatButton:
+            return L"Плавающая кнопка (перетащите файл)";
         case kTrayExit:
             return L"Выход";
         case kTrayHistoryRoot:
@@ -2781,6 +2888,25 @@ void show_tray_menu(HWND window) {
     AppendMenuW(
         menu,
         MF_OWNERDRAW,
+        kTrayImageFile,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayImageFile)));
+    AppendMenuW(
+        menu,
+        MF_OWNERDRAW,
+        kTrayImageRegion,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayImageRegion)));
+    UINT float_flags = MF_OWNERDRAW;
+    if (g_runtime && g_runtime->settings.image_float_button) {
+        float_flags |= MF_CHECKED;
+    }
+    AppendMenuW(
+        menu,
+        float_flags,
+        kTrayFloatButton,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayFloatButton)));
+    AppendMenuW(
+        menu,
+        MF_OWNERDRAW,
         kTrayExit,
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayExit)));
     SetMenuDefaultItem(menu, kTrayOpen, FALSE);
@@ -2883,14 +3009,6 @@ void recover_input_hooks(HWND window, const char* reason) {
     offline_translator::app_log_warn(
         std::string("восстановление ввода: ") + reason + " " + runtime_flags());
     restart_selection_timer(window);
-    if (!g_runtime) {
-        return;
-    }
-    if (!register_translate_hotkey(window, g_runtime->settings.translate_hotkey)) {
-        offline_translator::app_log_error(
-            "не удалось заново зарегистрировать горячую клавишу " +
-            g_runtime->settings.translate_hotkey);
-    }
 }
 
 void note_poll_tick(HWND window) {
@@ -2995,6 +3113,7 @@ void hide_result_popup() {
         g_popup_result_edit = nullptr;
         g_popup_copy_button = nullptr;
         g_popup_replace_button = nullptr;
+        g_popup_add_button = nullptr;
         g_popup_header = nullptr;
     }
 }
@@ -3198,6 +3317,9 @@ void show_result_popup(
     const std::string& target_code) {
     hide_selection_button();
     hide_result_popup();
+    // Оригинал для кнопки «Добавить»: выделенный текст на момент показа
+    // окна перевода (позже выделение в чужом окне могло уже пропасть).
+    g_popup_source_text = trim_trailing_whitespace(g_selection.selected_text);
     POINT cursor{};
     GetCursorPos(&cursor);
     const bool selectable = g_runtime &&
@@ -3248,7 +3370,7 @@ void show_result_popup(
     }
 
     const std::wstring header = from_utf8(
-        offline_translator::language_store_name(source_code) + " → " +
+        offline_translator::language_store_name(source_code) + " > " +
         offline_translator::language_store_name(target_code));
     g_popup_header = CreateWindowW(
         L"STATIC",
@@ -3316,10 +3438,37 @@ void show_result_popup(
         0);
     const bool show_replace =
         !g_screen_ocr_mode && text.rfind(L"Ошибка:", 0) != 0;
+    const bool show_add = show_replace && !g_popup_source_text.empty();
     g_popup_replace_button = nullptr;
+    g_popup_add_button = nullptr;
     int next_left = copy_x;
+    if (show_add) {
+        next_left = copy_x - 96 - 8;
+        g_popup_add_button = CreateWindowW(
+            L"BUTTON",
+            L"Добавить",
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+            next_left,
+            buttons_y,
+            96,
+            button_height,
+            g_result_popup,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kResultAddButton)),
+            nullptr,
+            nullptr);
+        SendMessageW(
+            g_popup_add_button,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(popup_font(PopupFont::button)),
+            TRUE);
+        SetWindowSubclass(
+            g_popup_add_button,
+            flat_button_subclass,
+            1,
+            0);
+    }
     if (show_replace) {
-        next_left = copy_x - 88 - 8;
+        next_left = next_left - 88 - 8;
         g_popup_replace_button = CreateWindowW(
             L"BUTTON",
             L"Замена",
@@ -3383,7 +3532,9 @@ void show_result_popup(
             " copy=" + std::to_string(
                 reinterpret_cast<uintptr_t>(g_popup_copy_button)) +
             " replace=" + std::to_string(
-                reinterpret_cast<uintptr_t>(g_popup_replace_button)));
+                reinterpret_cast<uintptr_t>(g_popup_replace_button)) +
+            " add=" + std::to_string(
+                reinterpret_cast<uintptr_t>(g_popup_add_button)));
     }
     if (!selectable) {
         // Иначе всё поле выделено и Copy может взять чужое выделение.
@@ -3453,7 +3604,7 @@ void start_selection_translation(HWND main_window) {
     const auto direction = selection_translation_direction(selected);
     offline_translator::app_log_info(
         "перевод выделения старт chars=" + std::to_string(text.size()) + " " +
-        direction.first + "→" + direction.second + " " + runtime_flags());
+        direction.first + ">" + direction.second + " " + runtime_flags());
     const auto engine_kind = selected_engine();
     const auto root = model_root_for_kind(engine_kind);
     const std::string engine_variant =
@@ -3518,58 +3669,85 @@ bool register_screen_ocr_hotkey(HWND window) {
                parsed->vk) != FALSE;
 }
 
-// OCR области экрана: выделение → распознавание → существующий попап.
-void start_screen_ocr(HWND window) {
-    if (!g_runtime || g_runtime->selection_busy.exchange(true)) {
-        offline_translator::app_log_warn(
-            "перевод области пропущен: уже выполняется " + runtime_flags());
-        return;
-    }
-    // Язык распознавания — выбранный в окне; «Авто» — английский.
-    std::string ocr_language = "en";
+// Языки OCR из главного окна. «Авто»: английский и русский (если данные
+// установлены) — иначе русские скриншоты читались бы латиницей.
+std::vector<std::string> current_ocr_languages() {
     try {
         if (!g_auto_source_language && g_source_language_combo) {
             const std::string source =
                 selected_source_language(g_source_language_combo);
             if (!source.empty() && source != kAutoSourceLanguage) {
-                ocr_language = source;
+                return {source};
             }
         }
     } catch (const std::exception&) {
     }
-    if (!offline_translator::tesseract_language_supported(ocr_language)) {
-        g_runtime->selection_busy = false;
-        const std::wstring message =
-            L"Язык «" +
-            from_utf8(offline_translator::language_store_name(ocr_language)) +
-            L"» не поддерживается распознаванием текста (OCR).";
-        localized_message_box(
-            window,
-            message.c_str(),
-            L"Перевод области экрана",
-            MB_ICONINFORMATION | MB_OK);
-        return;
+    const auto root = offline_translator::default_tessdata_root();
+    std::vector<std::string> codes;
+    for (const char* code : {"en", "ru"}) {
+        if (offline_translator::tessdata_installed(code, root)) {
+            codes.push_back(code);
+        }
+    }
+    if (codes.empty()) {
+        codes.push_back("en");
+    }
+    return codes;
+}
+
+// Проверяет данные OCR для языков и при согласии скачивает отсутствующие.
+bool ensure_ocr_languages(
+    HWND window,
+    const std::vector<std::string>& ocr_languages) {
+    for (const auto& code : ocr_languages) {
+        if (!offline_translator::tesseract_language_supported(code)) {
+            const std::wstring message =
+                L"Язык «" +
+                from_utf8(offline_translator::language_store_name(code)) +
+                L"» не поддерживается распознаванием текста (OCR).";
+            localized_message_box(
+                window,
+                message.c_str(),
+                L"Перевод области экрана",
+                MB_ICONINFORMATION | MB_OK);
+            return false;
+        }
     }
     const auto tessdata_root = offline_translator::default_tessdata_root();
-    if (!offline_translator::tessdata_installed(ocr_language, tessdata_root)) {
-        const std::wstring question =
-            L"Для распознавания текста нужны языковые данные OCR «" +
-            from_utf8(offline_translator::language_store_name(ocr_language)) +
-            L"» (примерно 1–8 МБ, скачиваются один раз).\n\n"
-            L"Скачать сейчас?";
-        const int answer = localized_message_box(
-            window,
-            question.c_str(),
-            L"Перевод области экрана",
-            MB_ICONQUESTION | MB_YESNO);
-        if (answer != IDYES) {
-            g_runtime->selection_busy = false;
-            return;
+    std::vector<std::string> missing;
+    for (const auto& code : ocr_languages) {
+        if (!offline_translator::tessdata_installed(code, tessdata_root)) {
+            missing.push_back(code);
         }
-        set_status(L"Скачивание языковых данных OCR…");
+    }
+    if (missing.empty()) {
+        return true;
+    }
+    std::wstring names;
+    for (std::size_t index = 0; index < missing.size(); ++index) {
+        if (index > 0) {
+            names += L", ";
+        }
+        names += from_utf8(
+            offline_translator::language_store_name(missing[index]));
+    }
+    const std::wstring question =
+        L"Для распознавания текста нужны языковые данные OCR «" + names +
+        L"» (примерно 1–8 МБ, скачиваются один раз).\n\n"
+        L"Скачать сейчас?";
+    const int answer = localized_message_box(
+        window,
+        question.c_str(),
+        L"Перевод области экрана",
+        MB_ICONQUESTION | MB_YESNO);
+    if (answer != IDYES) {
+        return false;
+    }
+    set_status(L"Скачивание языковых данных OCR…");
+    for (const auto& code : missing) {
         try {
             offline_translator::download_tessdata(
-                ocr_language,
+                code,
                 [window](
                     std::uint64_t downloaded,
                     std::uint64_t total,
@@ -3588,7 +3766,6 @@ void start_screen_ocr(HWND window) {
                 },
                 tessdata_root);
         } catch (const std::exception& error) {
-            g_runtime->selection_busy = false;
             const std::wstring message =
                 L"Не удалось скачать языковые данные OCR:\n" +
                 from_utf8(error.what());
@@ -3597,8 +3774,23 @@ void start_screen_ocr(HWND window) {
                 message.c_str(),
                 L"Перевод области экрана",
                 MB_ICONERROR | MB_OK);
-            return;
+            return false;
         }
+    }
+    return true;
+}
+
+// OCR области экрана: выделение > распознавание > существующий попап.
+void start_screen_ocr(HWND window) {
+    if (!g_runtime || g_runtime->selection_busy.exchange(true)) {
+        offline_translator::app_log_warn(
+            "перевод области пропущен: уже выполняется " + runtime_flags());
+        return;
+    }
+    const auto ocr_languages = current_ocr_languages();
+    if (!ensure_ocr_languages(window, ocr_languages)) {
+        g_runtime->selection_busy = false;
+        return;
     }
 
     set_status(L"Выделите область экрана мышью (Esc — отмена)");
@@ -3610,6 +3802,7 @@ void start_screen_ocr(HWND window) {
     if (!g_smoke_mode) {
         KillTimer(window, kSelectionPollTimer);
     }
+    const auto tessdata_root = offline_translator::default_tessdata_root();
     std::wstring recognized;
     try {
         const auto image =
@@ -3623,7 +3816,7 @@ void start_screen_ocr(HWND window) {
             return;
         }
         offline_translator::OcrEngine engine(tessdata_root);
-        engine.initialize(ocr_language);
+        engine.initialize_multi(ocr_languages);
         const auto ocr = engine.recognize(
             image->bgra.data(),
             image->width,
@@ -3664,6 +3857,1153 @@ void start_screen_ocr(HWND window) {
     // start_selection_translation сам выставит selection_busy.
     g_runtime->selection_busy = false;
     start_selection_translation(window);
+}
+
+int excel_method_combo_index(std::string_view method) {
+    if (method == offline_translator::kExcelWriteCom) {
+        return 1;
+    }
+    if (method == offline_translator::kExcelWriteAuto) {
+        return 2;
+    }
+    return 0;
+}
+
+std::string excel_method_from_combo(HWND combo) {
+    const LRESULT index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (index == 1) {
+        return std::string{offline_translator::kExcelWriteCom};
+    }
+    if (index == 2) {
+        return std::string{offline_translator::kExcelWriteAuto};
+    }
+    return std::string{offline_translator::kExcelWriteClipboard};
+}
+
+void fill_excel_method_combo(HWND combo, std::string_view selected) {
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Буфер обмена"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"COM (напрямую в Excel)"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Авто (COM, затем буфер обмена)"));
+    SendMessageW(
+        combo,
+        CB_SETCURSEL,
+        excel_method_combo_index(selected),
+        0);
+}
+
+// Пресеты вызова Excel-перевода: 0 — жест «двойное Ctrl+C»,
+// 1..4 — готовые комбинации, 5 — своя (набирается в поле нажатием).
+int excel_trigger_combo_index(
+    std::string_view trigger,
+    std::string_view hotkey) {
+    if (trigger == offline_translator::kExcelTriggerDoubleCtrlC) {
+        return 0;
+    }
+    if (hotkey == "Ctrl+Alt+T") {
+        return 1;
+    }
+    if (hotkey == "Ctrl+Shift+E") {
+        return 2;
+    }
+    if (hotkey == "Ctrl+Alt+E") {
+        return 3;
+    }
+    if (hotkey == "Alt+E") {
+        return 4;
+    }
+    return 5;
+}
+
+void fill_excel_trigger_combo(
+    HWND combo,
+    std::string_view trigger,
+    std::string_view hotkey) {
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Двойное Ctrl+C (как Ctrl+C+C)"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Ctrl+Alt+T"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Ctrl+Shift+E"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Ctrl+Alt+E"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Alt+E"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Своя комбинация…"));
+    SendMessageW(
+        combo,
+        CB_SETCURSEL,
+        excel_trigger_combo_index(trigger, hotkey),
+        0);
+}
+
+void update_excel_hotkey_field_state() {
+    if (!g_settings_excel_trigger || !g_settings_excel_hotkey) {
+        return;
+    }
+    const LRESULT index =
+        SendMessageW(g_settings_excel_trigger, CB_GETCURSEL, 0, 0);
+    EnableWindow(
+        g_settings_excel_hotkey,
+        index == 0 ? FALSE : TRUE);
+}
+
+void apply_excel_trigger_selection() {
+    if (!g_settings_excel_trigger || !g_settings_excel_hotkey) {
+        return;
+    }
+    const LRESULT index =
+        SendMessageW(g_settings_excel_trigger, CB_GETCURSEL, 0, 0);
+    if (index >= 1 && index <= 4) {
+        static const wchar_t* const specs[] = {
+            nullptr,
+            L"Ctrl+Alt+T",
+            L"Ctrl+Shift+E",
+            L"Ctrl+Alt+E",
+            L"Alt+E"};
+        SetWindowTextW(g_settings_excel_hotkey, specs[index]);
+    }
+    update_excel_hotkey_field_state();
+}
+
+// Поле горячей клавиши: комбинация записывается нажатием, а не набором.
+LRESULT CALLBACK hotkey_capture_subclass(
+    HWND handle,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param,
+    UINT_PTR,
+    DWORD_PTR) {
+    if (message == WM_GETDLGCODE) {
+        return DLGC_WANTALLKEYS | DLGC_WANTCHARS;
+    }
+    if (message == WM_CHAR) {
+        return 0;
+    }
+    if (message == WM_SETFOCUS) {
+        g_hotkey_capture_backup = control_text(handle);
+        return DefSubclassProc(handle, message, w_param, l_param);
+    }
+    if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
+        const unsigned key = static_cast<unsigned>(w_param);
+        if (key == VK_SHIFT || key == VK_CONTROL || key == VK_MENU ||
+            key == VK_LWIN || key == VK_RWIN) {
+            return 0;
+        }
+        if (key == VK_TAB || key == VK_RETURN) {
+            return DefSubclassProc(handle, message, w_param, l_param);
+        }
+        if (key == VK_ESCAPE) {
+            if (!g_hotkey_capture_backup.empty()) {
+                SetWindowTextW(handle, g_hotkey_capture_backup.c_str());
+            }
+            return 0;
+        }
+        offline_translator::Hotkey hotkey;
+        hotkey.control = key_down(VK_CONTROL);
+        hotkey.alt = key_down(VK_MENU);
+        hotkey.shift = key_down(VK_SHIFT);
+        hotkey.win = key_down(VK_LWIN) || key_down(VK_RWIN);
+        hotkey.vk = key;
+        const bool letter_or_digit =
+            (key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9');
+        const bool function_key = key >= VK_F1 && key <= VK_F24;
+        // Без модификатора разрешаем только F-клавиши: одиночная буква
+        // перехватывала бы обычный ввод во всей системе.
+        if (!function_key &&
+            (!letter_or_digit ||
+             !(hotkey.control || hotkey.alt || hotkey.shift ||
+               hotkey.win))) {
+            return 0;
+        }
+        const std::wstring spec =
+            from_utf8(offline_translator::format_hotkey(hotkey));
+        SetWindowTextW(handle, spec.c_str());
+        SendMessageW(handle, EM_SETSEL, spec.size(), spec.size());
+        if (g_settings_excel_trigger) {
+            SendMessageW(
+                g_settings_excel_trigger,
+                CB_SETCURSEL,
+                excel_trigger_combo_index(
+                    offline_translator::kExcelTriggerHotkey,
+                    to_utf8(spec)),
+                0);
+        }
+        return 0;
+    }
+    return DefSubclassProc(handle, message, w_param, l_param);
+}
+
+bool register_excel_hotkey(HWND window, const std::string& spec) {
+    UnregisterHotKey(window, kExcelHotkey);
+    const auto parsed = offline_translator::parse_hotkey(spec);
+    if (!parsed) {
+        return false;
+    }
+    return RegisterHotKey(
+               window,
+               kExcelHotkey,
+               offline_translator::hotkey_win32_modifiers(*parsed),
+               parsed->vk) != FALSE;
+}
+
+bool excel_is_foreground() {
+    const HWND foreground = GetForegroundWindow();
+    if (!foreground) {
+        return false;
+    }
+    wchar_t class_name[64]{};
+    if (GetClassNameW(foreground, class_name, 64) &&
+        _wcsicmp(class_name, L"EXCEL7") == 0) {
+        return true;
+    }
+    const HWND root = GetAncestor(foreground, GA_ROOT);
+    return root && GetClassNameW(root, class_name, 64) &&
+        _wcsicmp(class_name, L"XLMAIN") == 0;
+}
+
+// Хоткей мог быть нажат с зажатыми модификаторами: не шлём Ctrl+C/V, пока
+// пользователь их не отпустит, иначе send_* введёт просто «c»/«v».
+void wait_for_modifiers_released() {
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        if (!key_down(VK_CONTROL) && !key_down(VK_MENU) &&
+            !key_down(VK_SHIFT) && !key_down(VK_LWIN) &&
+            !key_down(VK_RWIN)) {
+            return;
+        }
+        Sleep(25);
+    }
+}
+
+// Ctrl+C из Excel как есть: TSV с табами и переводами строк, без обрезки.
+std::wstring excel_capture_selection_raw() {
+    offline_translator::Win32Clipboard clipboard(nullptr);
+    std::wstring previous;
+    try {
+        previous = clipboard.get_text();
+    } catch (const std::exception&) {
+    }
+    const std::wstring sentinel = L"__tling_excel_" +
+        std::to_wstring(GetTickCount64()) + L"__";
+    try {
+        clipboard.set_text(sentinel);
+    } catch (const std::exception&) {
+        return {};
+    }
+    offline_translator::send_copy_keyboard_shortcut();
+    std::wstring captured;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        Sleep(50);
+        try {
+            captured = clipboard.get_text();
+        } catch (const std::exception&) {
+            captured.clear();
+        }
+        if (!captured.empty() && captured != sentinel) {
+            break;
+        }
+    }
+    if (captured == sentinel) {
+        captured.clear();
+    }
+    if (captured.empty()) {
+        // Неудачный захват: не оставляем служебную метку в буфере.
+        try {
+            clipboard.set_text(previous);
+        } catch (const std::exception&) {
+        }
+    }
+    return captured;
+}
+
+bool excel_paste_text(const std::wstring& text, std::wstring* error) {
+    try {
+        offline_translator::Win32Clipboard clipboard(nullptr);
+        clipboard.set_text(text);
+    } catch (const std::exception& exception) {
+        *error = from_utf8(std::string("буфер обмена: ") + exception.what());
+        return false;
+    }
+    Sleep(80);
+    offline_translator::send_paste_keyboard_shortcut();
+    Sleep(150);
+    return true;
+}
+
+// Снимок настроек перевода для фонового потока (GUI-контролы читаем до
+// запуска потока).
+struct ExcelJobConfig {
+    bool manual_source{false};
+    std::string source;
+    std::string target;
+    std::string fallback_target;
+    offline_translator::EngineKind engine{
+        offline_translator::EngineKind::argos};
+    std::filesystem::path models_root;
+    std::string engine_variant;
+    std::string api_key;
+    std::string write_method;
+    std::wstring separator;
+    // Только для перевода изображений: языки OCR и файл результата.
+    std::vector<std::string> ocr_languages;
+    std::filesystem::path output_path;
+};
+
+std::pair<std::string, std::string> excel_direction(
+    const ExcelJobConfig& config,
+    const std::wstring& cell) {
+    const std::string text = to_utf8(cell);
+    if (!config.manual_source) {
+        const std::string source =
+            detect_source_language(text, config.engine);
+        std::string target = config.target;
+        if (source == target) {
+            const std::string fallback = config.fallback_target;
+            if (fallback.empty() || fallback == target ||
+                fallback == source) {
+                target = source == "en" ? "ru" : "en";
+            } else {
+                target = fallback;
+            }
+        }
+        return {source, target};
+    }
+    const std::string detected =
+        detect_language_optional(text, config.engine);
+    if (!detected.empty() && detected == config.target &&
+        config.source != config.target) {
+        return {detected, config.source};
+    }
+    return {config.source, config.target};
+}
+
+bool translate_text_batch(
+    const ExcelJobConfig& config,
+    const std::shared_ptr<GuiRuntime>& runtime,
+    const std::vector<std::wstring>& inputs,
+    std::vector<std::wstring>* outputs,
+    std::wstring* message) {
+    outputs->clear();
+    outputs->reserve(inputs.size());
+    try {
+        std::lock_guard lock(runtime->mutex);
+        if (runtime->closing) {
+            *message = L"Программа завершается";
+            return false;
+        }
+        auto& application = runtime->session.acquire(
+            config.engine,
+            config.models_root,
+            config.engine_variant,
+            config.api_key);
+        for (const auto& input : inputs) {
+            const auto direction = excel_direction(config, input);
+            const auto translated = application.translate(
+                to_utf8(input),
+                direction.first,
+                direction.second);
+            outputs->push_back(from_utf8(translated.text));
+        }
+        runtime->session.mark_loaded();
+        return true;
+    } catch (const std::exception& exception) {
+        *message = L"Ошибка перевода Excel: " +
+            from_utf8(exception.what());
+        return false;
+    }
+}
+
+bool run_excel_clipboard_job(
+    const ExcelJobConfig& config,
+    const std::shared_ptr<GuiRuntime>& runtime,
+    std::wstring* message,
+    const std::wstring& preloaded) {
+    if (!excel_is_foreground()) {
+        *message = L"Откройте Excel и выделите ячейки";
+        return false;
+    }
+    // При вызове по «двойному Ctrl+C» выделение уже скопировано в буфер.
+    std::wstring raw = preloaded;
+    if (raw.empty()) {
+        wait_for_modifiers_released();
+        raw = excel_capture_selection_raw();
+    }
+    if (raw.empty()) {
+        *message = L"Не удалось прочитать выделение Excel";
+        return false;
+    }
+    auto grid = offline_translator::parse_excel_tsv(raw);
+    const std::size_t cells = grid.cell_count();
+    const std::size_t translatable = grid.translatable_count();
+    if (!offline_translator::excel_selection_supported(cells, translatable)) {
+        *message = cells > offline_translator::kExcelMaxCells ||
+                translatable >
+                    offline_translator::kExcelMaxTranslatableCells
+            ? L"Слишком большой диапазон Excel"
+            : L"Нет текста в выделенных ячейках";
+        return false;
+    }
+    std::vector<std::wstring> inputs;
+    std::vector<std::pair<std::size_t, std::size_t>> positions;
+    for (std::size_t row = 0; row < grid.rows.size(); ++row) {
+        for (std::size_t col = 0; col < grid.rows[row].size(); ++col) {
+            const std::wstring& cell = grid.rows[row][col];
+            if (!offline_translator::excel_cell_translatable(cell)) {
+                continue;
+            }
+            inputs.push_back(cell);
+            positions.emplace_back(row, col);
+        }
+    }
+    std::vector<std::wstring> outputs;
+    if (!translate_text_batch(config, runtime, inputs, &outputs, message)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < positions.size(); ++index) {
+        const auto [row, col] = positions[index];
+        grid.rows[row][col] = offline_translator::excel_combined_cell(
+            grid.rows[row][col],
+            outputs[index],
+            config.separator);
+    }
+    const std::wstring result = offline_translator::serialize_excel_tsv(grid);
+    if (!excel_is_foreground()) {
+        // Выделение потеряно: перевод не пропадает — остаётся в буфере.
+        try {
+            offline_translator::Win32Clipboard clipboard(nullptr);
+            clipboard.set_text(result);
+        } catch (const std::exception&) {
+        }
+        *message = L"Excel потерял фокус — перевод скопирован в буфер";
+        return true;
+    }
+    wait_for_modifiers_released();
+    std::wstring error;
+    if (!excel_paste_text(result, &error)) {
+        *message = L"Ошибка: " + error;
+        return false;
+    }
+    *message = L"Перевод записан в Excel: ячеек " +
+        std::to_wstring(positions.size());
+    return true;
+}
+
+bool run_excel_com_job(
+    const ExcelJobConfig& config,
+    const std::shared_ptr<GuiRuntime>& runtime,
+    std::wstring* message,
+    bool* fallback_allowed) {
+    *fallback_allowed = true;
+    tling_excel::ExcelSession session;
+    std::wstring error;
+    if (!session.attach(&error)) {
+        *message = L"Не удалось подключиться к Excel (" + error + L")";
+        return false;
+    }
+    tling_excel::SelectionData data;
+    if (!session.read_selection(&data, &error)) {
+        *message = L"Не удалось прочитать выделение Excel (" + error + L")";
+        return false;
+    }
+    std::vector<std::wstring> inputs;
+    std::vector<long> rows;
+    std::vector<long> cols;
+    for (long row = 0; row < data.rows; ++row) {
+        for (long col = 0; col < data.cols; ++col) {
+            const std::size_t index =
+                static_cast<std::size_t>(row) *
+                    static_cast<std::size_t>(data.cols) +
+                static_cast<std::size_t>(col);
+            if (data.formulas[index]) {
+                continue;
+            }
+            if (!offline_translator::excel_cell_translatable(
+                    data.texts[index])) {
+                continue;
+            }
+            inputs.push_back(data.texts[index]);
+            rows.push_back(row + 1);
+            cols.push_back(col + 1);
+        }
+    }
+    if (inputs.empty()) {
+        *message = L"Нет текста в выделенных ячейках";
+        return false;
+    }
+    if (inputs.size() >
+        offline_translator::kExcelMaxTranslatableCells) {
+        *message = L"Слишком большой диапазон Excel";
+        return false;
+    }
+    std::vector<std::wstring> outputs;
+    if (!translate_text_batch(config, runtime, inputs, &outputs, message)) {
+        return false;
+    }
+    // После первой записи откат на буфер обмена уже нельзя: часть ячеек
+    // была бы переведена дважды.
+    *fallback_allowed = false;
+    for (std::size_t index = 0; index < inputs.size(); ++index) {
+        const std::wstring combined = offline_translator::excel_combined_cell(
+            inputs[index],
+            outputs[index],
+            config.separator);
+        if (!session.write_cell(rows[index], cols[index], combined, &error)) {
+            *message = L"Не удалось записать ячейку Excel (" + error + L")";
+            return false;
+        }
+    }
+    *message = L"Перевод записан в Excel: ячеек " +
+        std::to_wstring(inputs.size());
+    return true;
+}
+
+// Снимок настроек перевода для фоновых задач (Excel, изображения):
+// GUI-контролы читаем в GUI-потоке до запуска потока.
+ExcelJobConfig capture_job_config() {
+    ExcelJobConfig config;
+    if (!g_runtime) {
+        return config;
+    }
+    try {
+        config.target = selected_language(g_target_language_combo);
+        if (g_fallback_target_language_combo) {
+            config.fallback_target =
+                selected_language(g_fallback_target_language_combo);
+        }
+        if (!g_auto_source_language && g_source_language_combo) {
+            const std::string source =
+                selected_source_language(g_source_language_combo);
+            if (!source.empty() && source != kAutoSourceLanguage) {
+                config.manual_source = true;
+                config.source = source;
+            }
+        }
+    } catch (const std::exception&) {
+        config.target = g_runtime->settings.target_language;
+        config.fallback_target =
+            g_runtime->settings.fallback_target_language;
+    }
+    if (config.target.empty()) {
+        config.target = g_runtime->settings.target_language;
+    }
+    if (config.fallback_target.empty()) {
+        config.fallback_target =
+            g_runtime->settings.fallback_target_language;
+    }
+    config.engine = selected_engine();
+    config.models_root = model_root_for_kind(config.engine);
+    config.engine_variant =
+        config.engine == offline_translator::EngineKind::firefox
+            ? g_runtime->settings.architecture
+            : std::string{};
+    config.api_key = online_api_key_for_kind(config.engine);
+    config.write_method = g_runtime->settings.excel_write_method;
+    config.separator = from_utf8(g_runtime->settings.append_separator);
+    return config;
+}
+
+void start_excel_translation(HWND main_window, std::wstring preloaded = {}) {
+    if (!g_runtime || !g_runtime->settings.excel_translation) {
+        return;
+    }
+    if (g_runtime->excel_busy.exchange(true)) {
+        offline_translator::app_log_warn(
+            "excel: перевод пропущен, уже выполняется " + runtime_flags());
+        return;
+    }
+    ExcelJobConfig config = capture_job_config();
+    auto runtime = g_runtime;
+    offline_translator::app_log_info(
+        "excel: старт метод=" + config.write_method + " " + runtime_flags());
+    set_status(L"Перевожу ячейки Excel…");
+    std::thread([main_window, config, runtime, preloaded = std::move(preloaded)]() {
+        auto* payload = new StatusPayload();
+        std::wstring message;
+        bool success = false;
+        const bool try_com =
+            config.write_method == offline_translator::kExcelWriteCom ||
+            config.write_method == offline_translator::kExcelWriteAuto;
+        if (try_com) {
+            bool fallback_allowed = false;
+            success = run_excel_com_job(
+                config,
+                runtime,
+                &message,
+                &fallback_allowed);
+            if (!success && fallback_allowed &&
+                config.write_method == offline_translator::kExcelWriteAuto) {
+                offline_translator::app_log_info(
+                    "excel: COM не сработал (" + to_utf8(message) +
+                    "), пробую буфер обмена");
+                success = run_excel_clipboard_job(
+                    config,
+                    runtime,
+                    &message,
+                    preloaded);
+            }
+        } else {
+            success = run_excel_clipboard_job(
+                config,
+                runtime,
+                &message,
+                preloaded);
+        }
+        runtime->excel_busy = false;
+        payload->failed = !success;
+        payload->text = message;
+        if (runtime->closing || !IsWindow(main_window) ||
+            !PostMessageW(
+                main_window,
+                kExcelResultMessage,
+                0,
+                reinterpret_cast<LPARAM>(payload))) {
+            delete payload;
+        }
+    }).detach();
+}
+
+// Выбор файла изображения и пути сохранения результата.
+std::optional<std::filesystem::path> choose_image_file(HWND owner) {
+    const std::wstring title =
+        offline_translator::tr(L"Выберите изображение для перевода");
+    // Фильтр: строки разделяются '\0', весь список — двойным '\0'. Собираем
+    // вручную, иначе конструктор wstring обрезает по первому нулю.
+    std::wstring filter;
+    const auto add_filter = [&filter](
+        const std::wstring& label,
+        const std::wstring& pattern) {
+        filter += label;
+        filter.push_back(L'\0');
+        filter += pattern;
+        filter.push_back(L'\0');
+    };
+    add_filter(
+        std::wstring(offline_translator::tr(L"Изображения")) +
+            L" (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff)",
+        L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff");
+    add_filter(L"*.*", L"*.*");
+    filter.push_back(L'\0');
+    wchar_t file[MAX_PATH]{};
+    OPENFILENAMEW options{};
+    options.lStructSize = sizeof(options);
+    options.hwndOwner = owner;
+    options.lpstrFilter = filter.c_str();
+    options.nFilterIndex = 1;
+    options.lpstrFile = file;
+    options.nMaxFile = MAX_PATH;
+    options.lpstrTitle = title.c_str();
+    options.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!GetOpenFileNameW(&options)) {
+        return std::nullopt;
+    }
+    return std::filesystem::path(file);
+}
+
+std::optional<std::filesystem::path> choose_export_path(
+    HWND owner,
+    const std::wstring& stem,
+    const std::filesystem::path& directory) {
+    const std::wstring title = offline_translator::tr(L"Сохранить перевод");
+    std::wstring filter;
+    filter += std::wstring(offline_translator::tr(L"Документ Word")) +
+        L" (*.docx)";
+    filter.push_back(L'\0');
+    filter += L"*.docx";
+    filter.push_back(L'\0');
+    filter += std::wstring(offline_translator::tr(L"Таблица Excel")) +
+        L" (*.xlsx)";
+    filter.push_back(L'\0');
+    filter += L"*.xlsx";
+    filter.push_back(L'\0');
+    filter.push_back(L'\0');
+    const std::wstring suggested = stem + L".docx";
+    const std::wstring directory_text = directory.wstring();
+    wchar_t file[MAX_PATH]{};
+    wcsncpy_s(file, suggested.c_str(), MAX_PATH - 1);
+    OPENFILENAMEW options{};
+    options.lStructSize = sizeof(options);
+    options.hwndOwner = owner;
+    options.lpstrFilter = filter.c_str();
+    options.nFilterIndex = 1;
+    options.lpstrFile = file;
+    options.nMaxFile = MAX_PATH;
+    options.lpstrTitle = title.c_str();
+    // Расширение подставляем сами по выбранному фильтру: lpstrDefExt
+    // всегда дописывал «.docx», и Excel-экспорт сохранялся как Word.
+    if (!directory_text.empty()) {
+        options.lpstrInitialDir = directory_text.c_str();
+    }
+    options.Flags =
+        OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!GetSaveFileNameW(&options)) {
+        return std::nullopt;
+    }
+    std::filesystem::path result(file);
+    // Имя может содержать точки (дата), поэтому ориентируемся не на
+    // пустое расширение, а на то, docx/xlsx это или нет.
+    const std::wstring extension = result.extension().wstring();
+    if (_wcsicmp(extension.c_str(), L".docx") != 0 &&
+        _wcsicmp(extension.c_str(), L".xlsx") != 0) {
+        result += options.nFilterIndex == 2 ? L".xlsx" : L".docx";
+    }
+    return result;
+}
+
+void start_image_job(
+    HWND main_window,
+    ExcelJobConfig config,
+    std::vector<std::uint8_t> bgra,
+    int width,
+    int height) {
+    if (!g_runtime) {
+        return;
+    }
+    if (g_runtime->image_busy.exchange(true)) {
+        offline_translator::app_log_warn(
+            "изображение: перевод пропущен, уже выполняется " + runtime_flags());
+        return;
+    }
+    auto runtime = g_runtime;
+    set_status(L"Перевожу изображение…");
+    std::thread([main_window, config, runtime, bgra = std::move(bgra), width, height]() {
+        auto* payload = new StatusPayload();
+        std::wstring message;
+        bool success = false;
+        try {
+            offline_translator::OcrEngine engine;
+            engine.initialize_multi(config.ocr_languages);
+            int rotation = 0;
+            const auto layout = offline_translator::recognize_best_orientation(
+                engine,
+                bgra.data(),
+                width,
+                height,
+                width * 4,
+                4,
+                &rotation);
+            if (rotation != 0) {
+                offline_translator::app_log_info(
+                    "изображение: автоповорот " +
+                    std::to_string(rotation) + "°");
+            }
+            // Границы колонок берём из линий сетки на самом изображении.
+            int rotated_width = width;
+            int rotated_height = height;
+            std::vector<std::uint8_t> rotated;
+            if (rotation != 0) {
+                rotated = offline_translator::rotate_bgra_image(
+                    bgra.data(),
+                    width,
+                    height,
+                    width * 4,
+                    rotation,
+                    &rotated_width,
+                    &rotated_height);
+            }
+            const std::uint8_t* grid_image =
+                rotation != 0 ? rotated.data() : bgra.data();
+            const auto grid_columns =
+                offline_translator::detect_vertical_grid_lines(
+                    grid_image,
+                    rotated_width,
+                    rotated_height,
+                    rotated_width * 4);
+            auto page = offline_translator::build_layout_page(
+                layout,
+                grid_columns);
+            const auto texts = offline_translator::layout_texts(page);
+            if (texts.empty()) {
+                message = L"Текст на изображении не найден";
+            } else {
+                std::vector<std::wstring> translated;
+                if (translate_text_batch(
+                        config,
+                        runtime,
+                        texts,
+                        &translated,
+                        &message)) {
+                    offline_translator::apply_layout_translations(
+                        &page,
+                        translated);
+                    offline_translator::export_layout_page(
+                        page,
+                        config.output_path);
+                    message = L"Перевод сохранён: " +
+                        config.output_path.filename().wstring();
+                    success = true;
+                }
+            }
+        } catch (const std::exception& error) {
+            message = L"Ошибка перевода изображения: " +
+                from_utf8(error.what());
+        }
+        runtime->image_busy = false;
+        payload->failed = !success;
+        payload->text = message;
+        if (runtime->closing || !IsWindow(main_window) ||
+            !PostMessageW(
+                main_window,
+                kImageResultMessage,
+                0,
+                reinterpret_cast<LPARAM>(payload))) {
+            delete payload;
+        }
+    }).detach();
+}
+
+void start_image_path_translation(
+    HWND window,
+    const std::filesystem::path& source) {
+    if (!g_runtime) {
+        return;
+    }
+    if (g_runtime->image_busy) {
+        set_status(L"Уже перевожу изображение…");
+        return;
+    }
+    const auto ocr_languages = current_ocr_languages();
+    if (!ensure_ocr_languages(window, ocr_languages)) {
+        return;
+    }
+    const std::wstring stem =
+        source.stem().wstring() + L" — перевод";
+    const auto output = choose_export_path(window, stem, source.parent_path());
+    if (!output) {
+        return;
+    }
+    ExcelJobConfig config = capture_job_config();
+    config.ocr_languages = ocr_languages;
+    config.output_path = *output;
+    auto image = offline_translator::load_image_file(source);
+    if (!image || image->bgra.empty()) {
+        const std::wstring message =
+            L"Не удалось прочитать изображение:\n" +
+            source.filename().wstring() +
+            L"\n\nПоддерживаются PNG, JPG, BMP, GIF, TIFF.";
+        localized_message_box(
+            window,
+            message.c_str(),
+            L"Перевод изображения",
+            MB_ICONERROR | MB_OK);
+        return;
+    }
+    start_image_job(
+        window,
+        config,
+        std::move(image->bgra),
+        image->width,
+        image->height);
+}
+
+void start_image_file_translation(HWND window) {
+    const auto source = choose_image_file(window);
+    if (!source) {
+        return;
+    }
+    start_image_path_translation(window, *source);
+}
+
+// Область экрана > файл Word/Excel.
+void start_image_region_translation(HWND window) {
+    if (!g_runtime) {
+        return;
+    }
+    if (g_runtime->image_busy) {
+        set_status(L"Уже перевожу изображение…");
+        return;
+    }
+    const auto ocr_languages = current_ocr_languages();
+    if (!ensure_ocr_languages(window, ocr_languages)) {
+        return;
+    }
+    set_status(L"Выделите область экрана мышью (Esc — отмена)");
+    if (g_status_label) {
+        UpdateWindow(g_status_label);
+    }
+    if (!g_smoke_mode) {
+        KillTimer(window, kSelectionPollTimer);
+    }
+    auto image = offline_translator::select_screen_region_image(2);
+    if (!g_smoke_mode) {
+        SetTimer(window, kSelectionPollTimer, 40, nullptr);
+    }
+    if (!image) {
+        set_status(L"Отменено");
+        return;
+    }
+    const auto output =
+        choose_export_path(
+            window,
+            offline_translator::tr(L"Перевод изображения"),
+            {});
+    if (!output) {
+        return;
+    }
+    ExcelJobConfig config = capture_job_config();
+    config.ocr_languages = ocr_languages;
+    config.output_path = *output;
+    start_image_job(
+        window,
+        config,
+        std::move(image->bgra),
+        image->width,
+        image->height);
+}
+
+// Плавающая кнопка: перетащите на неё файл изображения.
+constexpr wchar_t kFloatButtonClass[] = L"TLingImageFloatButton";
+
+void paint_float_button(HWND window) {
+    PAINTSTRUCT paint{};
+    HDC dc = BeginPaint(window, &paint);
+    RECT client{};
+    GetClientRect(window, &client);
+    const UiTheme theme = current_ui_theme();
+    HBRUSH background = CreateSolidBrush(theme.background);
+    FillRect(dc, &client, background);
+    DeleteObject(background);
+    HBRUSH frame = CreateSolidBrush(theme.border);
+    RECT border = client;
+    FrameRect(dc, &border, frame);
+    DeleteObject(frame);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, theme.button_text);
+    SelectObject(dc, popup_font(PopupFont::body));
+    DrawTextW(
+        dc,
+        L"Aa",
+        -1,
+        &client,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    EndPaint(window, &paint);
+}
+
+LRESULT CALLBACK float_button_proc_impl(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    if (message == WM_NCHITTEST) {
+        return HTCAPTION;  // окно таскается за любую точку
+    }
+    if (message == WM_NCLBUTTONDBLCLK && g_runtime) {
+        start_image_file_translation(g_runtime->main_window);
+        return 0;
+    }
+    if (message == WM_DROPFILES) {
+        wchar_t file[MAX_PATH]{};
+        const HDROP drop = reinterpret_cast<HDROP>(w_param);
+        if (DragQueryFileW(drop, 0, file, MAX_PATH) > 0 && g_runtime) {
+            DragFinish(drop);
+            start_image_path_translation(
+                g_runtime->main_window,
+                std::filesystem::path(file));
+            return 0;
+        }
+        DragFinish(drop);
+        return 0;
+    }
+    if (message == WM_PAINT) {
+        if (!g_float_button_uses_icon) {
+            paint_float_button(window);
+        }
+        return 0;
+    }
+    if (message == WM_ERASEBKGND) {
+        return 1;
+    }
+    if (message == WM_DESTROY) {
+        if (g_float_button == window) {
+            g_float_button = nullptr;
+            g_float_button_uses_icon = false;
+        }
+        return 0;
+    }
+    return DefWindowProcW(window, message, w_param, l_param);
+}
+
+LRESULT CALLBACK float_button_proc(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    try {
+        return float_button_proc_impl(window, message, w_param, l_param);
+    } catch (const std::exception& error) {
+        offline_translator::app_log_error(
+            std::string("ошибка плавающей кнопки: ") + error.what());
+        return 0;
+    }
+}
+
+void remove_float_tooltip() {
+    if (g_float_tooltip) {
+        DestroyWindow(g_float_tooltip);
+        g_float_tooltip = nullptr;
+    }
+}
+
+void add_float_tooltip() {
+    if (!g_float_button || g_float_tooltip) {
+        return;
+    }
+    const HINSTANCE instance = g_runtime && g_runtime->main_window
+        ? window_instance(g_runtime->main_window)
+        : GetModuleHandleW(nullptr);
+    g_float_tooltip = CreateWindowExW(
+        WS_EX_TOPMOST,
+        TOOLTIPS_CLASSW,
+        nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        g_float_button,
+        nullptr,
+        instance,
+        nullptr);
+    if (!g_float_tooltip) {
+        return;
+    }
+    static std::wstring tooltip_text;
+    tooltip_text = offline_translator::tr(
+        L"Перетащите файл сюда или дважды кликните");
+    TOOLINFOW tool{};
+    tool.cbSize = sizeof(tool);
+    tool.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+    tool.hwnd = g_float_button;
+    tool.uId = reinterpret_cast<UINT_PTR>(g_float_button);
+    tool.lpszText = const_cast<LPWSTR>(tooltip_text.c_str());
+    SendMessageW(
+        g_float_tooltip,
+        TTM_ADDTOOLW,
+        0,
+        reinterpret_cast<LPARAM>(&tool));
+}
+
+void show_float_button(bool show, bool announce = true) {
+    if (show) {
+        if (g_float_button) {
+            return;
+        }
+        RECT work{};
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        int x = work.right - 24 - kSelectionIconSize;
+        int y = work.top + (work.bottom - work.top) / 3;
+        if (g_runtime && g_runtime->settings.image_float_button_x >= 0) {
+            x = g_runtime->settings.image_float_button_x;
+        }
+        if (g_runtime && g_runtime->settings.image_float_button_y >= 0) {
+            y = g_runtime->settings.image_float_button_y;
+        }
+        clamp_point_to_work_area(kSelectionIconSize, kSelectionIconSize, x, y);
+        g_float_button_uses_icon = false;
+        HBITMAP icon_bitmap = nullptr;
+        const bool have_icon = compose_selection_icon_bitmap(&icon_bitmap);
+        g_float_button = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW |
+                (have_icon ? WS_EX_LAYERED : 0),
+            kFloatButtonClass,
+            L"TLing",
+            WS_POPUP | WS_VISIBLE,
+            x,
+            y,
+            kSelectionIconSize,
+            kSelectionIconSize,
+            g_runtime ? g_runtime->main_window : nullptr,
+            nullptr,
+            g_runtime ? window_instance(g_runtime->main_window)
+                      : GetModuleHandleW(nullptr),
+            nullptr);
+        if (!g_float_button) {
+            if (icon_bitmap) {
+                DeleteObject(icon_bitmap);
+            }
+            return;
+        }
+        if (have_icon &&
+            apply_layered_icon(g_float_button, icon_bitmap, x, y)) {
+            g_float_button_uses_icon = true;
+        } else {
+            SetWindowLongPtrW(
+                g_float_button,
+                GWL_EXSTYLE,
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW);
+            SetWindowLongPtrW(
+                g_float_button,
+                GWL_STYLE,
+                WS_POPUP | WS_BORDER | WS_VISIBLE);
+        }
+        if (icon_bitmap) {
+            DeleteObject(icon_bitmap);
+        }
+        DragAcceptFiles(g_float_button, TRUE);
+        add_float_tooltip();
+    } else if (g_float_button) {
+        RECT bounds{};
+        if (GetWindowRect(g_float_button, &bounds)) {
+            update_runtime_settings(
+                [&bounds](offline_translator::AppSettings& settings) {
+                    settings.image_float_button_x = bounds.left;
+                    settings.image_float_button_y = bounds.top;
+                });
+        }
+        remove_float_tooltip();
+        DestroyWindow(g_float_button);
+        g_float_button = nullptr;
+    }
+    offline_translator::AppSettings snapshot;
+    update_runtime_settings(
+        [show, &snapshot](offline_translator::AppSettings& settings) {
+            settings.image_float_button = show;
+            snapshot = settings;
+        });
+    if (!g_smoke_mode && announce) {
+        try {
+            offline_translator::save_settings(snapshot);
+        } catch (const std::exception&) {
+        }
+    }
+    if (announce) {
+        show_tray_balloon(
+            L"TLing",
+            show ? offline_translator::tr(L"Плавающая кнопка включена")
+                 : offline_translator::tr(L"Плавающая кнопка выключена"),
+            false);
+    }
 }
 
 void capture_and_show_button(HWND main_window, int cursor_x, int cursor_y) {
@@ -3742,6 +5082,18 @@ void capture_selection_only(HWND main_window, bool translate_now = false) {
 void finish_double_ctrl_c(HWND main_window) {
     try {
         const std::wstring selected = clipboard_text();
+        // Excel: «двойное Ctrl+C» переводит выделенные ячейки на месте.
+        if (selected.size() >= 2 && g_runtime &&
+            g_runtime->settings.excel_translation &&
+            g_runtime->settings.excel_trigger ==
+                offline_translator::kExcelTriggerDoubleCtrlC &&
+            excel_is_foreground()) {
+            offline_translator::app_log_info(
+                "Ctrl+C+C: перевод ячеек Excel");
+            hide_selection_button();
+            start_excel_translation(main_window, selected);
+            return;
+        }
         if (selected.size() >= 2) {
             g_selection.selected_text = selected;
             g_selection.replace_hwnd = GetForegroundWindow();
@@ -3928,50 +5280,6 @@ void poll_selection(HWND main_window) {
         g_selection.press_active = false;
     }
     g_selection.was_pressed = pressed;
-}
-
-void handle_translate_hotkey(HWND window) {
-    g_screen_ocr_mode = false;
-    offline_translator::app_log_info("горячая клавиша перевода " + runtime_flags());
-    for (int step = 0; step < 25; ++step) {
-        if (!key_down(VK_CONTROL) && !key_down(VK_SHIFT) &&
-            !key_down(VK_MENU) && !key_down(VK_LWIN) && !key_down(VK_RWIN)) {
-            break;
-        }
-        Sleep(20);
-    }
-    std::wstring previous;
-    try {
-        previous = clipboard_text();
-    } catch (const std::exception&) {
-    }
-    std::wstring selected;
-    try {
-        selected = offline_translator::capture_selected_text_win32(
-            window,
-            g_runtime && g_runtime->settings.auto_copy_selection);
-    } catch (const std::exception&) {
-    }
-    if (selected.size() < 2) {
-        selected = previous;
-    }
-    if (selected.size() < 2) {
-        offline_translator::app_log_warn("горячая клавиша: нет выделенного текста");
-        set_status(L"Нет выделенного текста");
-        return;
-    }
-    g_selection.selected_text = selected;
-    g_selection.replace_hwnd = GetForegroundWindow();
-    if (g_runtime && g_runtime->settings.auto_copy_selection) {
-        try {
-            offline_translator::add_clipboard_history_item(to_utf8(selected));
-        } catch (const std::exception&) {
-        }
-    }
-    if (IsWindowVisible(window) && g_source_edit) {
-        SetWindowTextW(g_source_edit, selected.c_str());
-    }
-    start_selection_translation(window);
 }
 
 void close_settings_window();
@@ -4414,6 +5722,284 @@ void start_startup_update_check(HWND window) {
     }).detach();
 }
 
+// Предложение обновления — своё всплывающее окно в стиле приложения
+// (тема, шрифты) с кнопками «Да» и «Нет» вместо системного MessageBox.
+void hide_update_popup() {
+    if (g_update_popup) {
+        DestroyWindow(g_update_popup);
+        g_update_popup = nullptr;
+        g_update_popup_text = nullptr;
+        g_update_popup_yes = nullptr;
+        g_update_popup_no = nullptr;
+    }
+    if (g_update_popup_disabled_owner && g_runtime &&
+        g_runtime->main_window && IsWindow(g_runtime->main_window) &&
+        !g_runtime->closing) {
+        EnableWindow(g_runtime->main_window, TRUE);
+    }
+    g_update_popup_disabled_owner = false;
+}
+
+LRESULT CALLBACK update_button_subclass(
+    HWND handle,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param,
+    UINT_PTR,
+    DWORD_PTR) {
+    if (message == WM_KEYDOWN && w_param == VK_ESCAPE) {
+        hide_update_popup();
+        return 0;
+    }
+    return DefSubclassProc(handle, message, w_param, l_param);
+}
+
+void show_update_popup(HWND owner, const offline_translator::UpdateInfo& info) {
+    hide_update_popup();
+    constexpr int border = 1;
+    constexpr int pad_x = 16;
+    constexpr int pad_y = 14;
+    const int width = 420;
+    const int content_width = width - 2 * border - 2 * pad_x;
+
+    std::wstring message = offline_translator::tr(L"Доступна ") +
+        from_utf8(info.release.title) + L" (" +
+        from_utf8(info.release.tag) + L").";
+    if (info.asset) {
+        message += L"\r\n" + offline_translator::tr(L"Файл: ") +
+            from_utf8(info.asset->name);
+    } else {
+        message += L"\r\n" + offline_translator::tr(
+            L"Подходящего файла установки в релизе нет — "
+            L"откройте страницу релизов.");
+    }
+    message += L"\r\n\r\n" +
+        offline_translator::tr(L"Скачать и установить сейчас?");
+
+    // Высота текста: 3..12 строк с переносом, как у окна перевода.
+    const int line_height = popup_line_height();
+    const int header_height = line_height + 4;
+    int visual_lines =
+        (measure_text_height(message, content_width) + line_height - 1) /
+        line_height;
+    visual_lines = std::clamp(visual_lines, 3, 12);
+    const int text_height = visual_lines * line_height + 4;
+    const int button_height = 28;
+    const int buttons_y =
+        border + pad_y + header_height + 4 + text_height + 12;
+    const int client_height = buttons_y + button_height + pad_y + border;
+
+    int x = 0;
+    int y = 0;
+    RECT anchor{};
+    if (owner && IsWindow(owner) && IsWindowVisible(owner) &&
+        GetWindowRect(owner, &anchor)) {
+        x = anchor.left + ((anchor.right - anchor.left) - width) / 2;
+        y = anchor.top + ((anchor.bottom - anchor.top) - client_height) / 2;
+    } else {
+        RECT work{};
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        x = work.left + ((work.right - work.left) - width) / 2;
+        y = work.top + ((work.bottom - work.top) - client_height) / 2;
+    }
+    clamp_point_to_work_area(width, client_height, x, y);
+
+    g_update_popup = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        L"TLingUpdatePopup",
+        L"Обновление TLing",
+        WS_POPUP | WS_VISIBLE,
+        x,
+        y,
+        width,
+        client_height,
+        owner,
+        nullptr,
+        window_instance(owner),
+        nullptr);
+    if (!g_update_popup) {
+        return;
+    }
+
+    HWND header = CreateWindowW(
+        L"STATIC",
+        offline_translator::tr(L"Обновление TLing").c_str(),
+        WS_VISIBLE | WS_CHILD,
+        border + pad_x,
+        border + pad_y,
+        content_width,
+        header_height,
+        g_update_popup,
+        nullptr,
+        nullptr,
+        nullptr);
+    SendMessageW(
+        header,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(popup_font(PopupFont::header)),
+        TRUE);
+
+    g_update_popup_text = CreateWindowW(
+        L"STATIC",
+        message.c_str(),
+        WS_VISIBLE | WS_CHILD,
+        border + pad_x,
+        border + pad_y + header_height + 4,
+        content_width,
+        text_height,
+        g_update_popup,
+        nullptr,
+        nullptr,
+        nullptr);
+    SendMessageW(
+        g_update_popup_text,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(popup_font(PopupFont::body)),
+        TRUE);
+
+    const int button_width = 96;
+    const int no_x = width - border - pad_x - button_width;
+    const int yes_x = no_x - button_width - 8;
+    const auto create_button = [&](int button_x, const wchar_t* label, int id) {
+        HWND button = CreateWindowW(
+            L"BUTTON",
+            offline_translator::tr(label).c_str(),
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+            button_x,
+            buttons_y,
+            button_width,
+            button_height,
+            g_update_popup,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+            nullptr,
+            nullptr);
+        SendMessageW(
+            button,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(popup_font(PopupFont::button)),
+            TRUE);
+        SetWindowSubclass(button, flat_button_subclass, 1, 0);
+        SetWindowSubclass(button, update_button_subclass, 2, 0);
+        return button;
+    };
+    g_update_popup_yes = create_button(yes_x, L"Да", kUpdateYesButton);
+    g_update_popup_no = create_button(no_x, L"Нет", kUpdateNoButton);
+
+    // Как у системного диалога: пока не дан ответ, главное окно недоступно.
+    if (owner && IsWindow(owner) && IsWindowEnabled(owner)) {
+        EnableWindow(owner, FALSE);
+        g_update_popup_disabled_owner = true;
+    }
+    // Фокус на «Нет»: случайное нажатие не запускает установку.
+    SetFocus(g_update_popup_no);
+    offline_translator::app_log_info(
+        "update popup: показано версия=" + info.release.tag);
+}
+
+LRESULT CALLBACK update_popup_proc_impl(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    if (message == WM_COMMAND) {
+        const int id = LOWORD(w_param);
+        if (id == kUpdateYesButton) {
+            hide_update_popup();
+            set_status(L"Скачивание обновления…");
+            start_update_install();
+            return 0;
+        }
+        if (id == kUpdateNoButton) {
+            offline_translator::app_log_info(
+                "update popup: пользователь отложил обновление");
+            hide_update_popup();
+            return 0;
+        }
+    }
+    if (message == WM_DRAWITEM) {
+        auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
+        if (draw && draw->CtlType == ODT_BUTTON) {
+            const UiTheme theme = current_ui_theme();
+            const bool hovered =
+                GetPropW(draw->hwndItem, kHoverPropertyName) != nullptr;
+            HBRUSH brush = CreateSolidBrush(
+                hovered ? theme.button_hover : theme.button_face);
+            FillRect(draw->hDC, &draw->rcItem, brush);
+            DeleteObject(brush);
+            SetBkMode(draw->hDC, TRANSPARENT);
+            SetTextColor(draw->hDC, theme.button_text);
+            SelectObject(draw->hDC, popup_font(PopupFont::button));
+            wchar_t label[64]{};
+            GetWindowTextW(draw->hwndItem, label, 64);
+            DrawTextW(
+                draw->hDC,
+                label,
+                -1,
+                &draw->rcItem,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            return TRUE;
+        }
+    }
+    if (message == WM_ERASEBKGND) {
+        RECT client{};
+        GetClientRect(window, &client);
+        HDC dc = reinterpret_cast<HDC>(w_param);
+        const UiTheme theme = current_ui_theme();
+        HBRUSH border_brush = CreateSolidBrush(theme.border);
+        FillRect(dc, &client, border_brush);
+        DeleteObject(border_brush);
+        RECT inner = client;
+        InflateRect(&inner, -1, -1);
+        HBRUSH panel_brush = CreateSolidBrush(theme.background);
+        FillRect(dc, &inner, panel_brush);
+        DeleteObject(panel_brush);
+        return 1;
+    }
+    if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT) {
+        const HDC dc = reinterpret_cast<HDC>(w_param);
+        const UiTheme theme = current_ui_theme();
+        SetBkColor(dc, theme.background);
+        if (reinterpret_cast<HWND>(l_param) == g_update_popup_text) {
+            SetTextColor(dc, theme.text);
+        } else {
+            SetTextColor(dc, theme.header);
+        }
+        return reinterpret_cast<LRESULT>(theme_background_brush());
+    }
+    if (message == WM_KEYDOWN && w_param == VK_ESCAPE) {
+        hide_update_popup();
+        return 0;
+    }
+    if (message == WM_CLOSE) {
+        hide_update_popup();
+        return 0;
+    }
+    if (message == WM_DESTROY) {
+        if (g_update_popup == window) {
+            g_update_popup = nullptr;
+            g_update_popup_text = nullptr;
+            g_update_popup_yes = nullptr;
+            g_update_popup_no = nullptr;
+        }
+        return 0;
+    }
+    return DefWindowProcW(window, message, w_param, l_param);
+}
+
+LRESULT CALLBACK update_popup_proc(
+    HWND window,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param) {
+    try {
+        return update_popup_proc_impl(window, message, w_param, l_param);
+    } catch (const std::exception& error) {
+        offline_translator::app_log_error(
+            std::string("ошибка окна обновления: ") + error.what());
+        return 0;
+    }
+}
+
 LRESULT CALLBACK selection_button_proc_impl(
     HWND window,
     UINT message,
@@ -4511,6 +6097,22 @@ LRESULT CALLBACK result_popup_proc_impl(
             }
             return 0;
         }
+        if (id == kResultAddButton) {
+            offline_translator::app_log_info("add: клик по кнопке");
+            const std::wstring text = g_popup_result_edit
+                ? control_text(g_popup_result_edit)
+                : std::wstring{};
+            std::string separator{" / "};
+            if (g_runtime) {
+                separator = g_runtime->settings.append_separator;
+            }
+            add_source_with_translation(
+                window,
+                g_popup_source_text,
+                text,
+                from_utf8(separator));
+            return 0;
+        }
         if (id == kResultReplaceButton) {
             offline_translator::app_log_info("replace: клик по кнопке");
             const std::wstring text = g_popup_result_edit
@@ -4600,7 +6202,8 @@ LRESULT CALLBACK result_popup_proc_impl(
         };
         const bool on_action_button =
             over_button(g_popup_copy_button) ||
-            over_button(g_popup_replace_button);
+            over_button(g_popup_replace_button) ||
+            over_button(g_popup_add_button);
         offline_translator::app_log_info(
             "popup: нажатие в " + std::to_string(cursor.x) + "," +
             std::to_string(cursor.y) +
@@ -4616,6 +6219,7 @@ LRESULT CALLBACK result_popup_proc_impl(
             g_popup_result_edit = nullptr;
             g_popup_copy_button = nullptr;
             g_popup_replace_button = nullptr;
+            g_popup_add_button = nullptr;
             g_popup_header = nullptr;
         }
         return 0;
@@ -4673,17 +6277,53 @@ void apply_settings_dialog(HWND settings_window) {
     }
     settings.clipboard_history_limit =
         offline_translator::normalize_clipboard_history_limit(history_limit);
-    const std::string hotkey = to_utf8(control_text(g_settings_hotkey_edit));
-    if (!offline_translator::parse_hotkey(hotkey)) {
-        localized_message_box(
-            settings_window,
-            L"Некорректная горячая клавиша. Пример: Ctrl+Shift+T",
-            L"Настройки",
-            MB_ICONWARNING | MB_OK);
-        return;
+    if (g_settings_append_separator) {
+        settings.append_separator =
+            append_separator_from_combo(g_settings_append_separator);
     }
-    settings.translate_hotkey =
-        offline_translator::format_hotkey(*offline_translator::parse_hotkey(hotkey));
+    if (g_settings_excel_enabled) {
+        settings.excel_translation =
+            SendMessageW(
+                g_settings_excel_enabled,
+                BM_GETCHECK,
+                0,
+                0) == BST_CHECKED;
+    }
+    if (g_settings_excel_trigger) {
+        const LRESULT index =
+            SendMessageW(g_settings_excel_trigger, CB_GETCURSEL, 0, 0);
+        settings.excel_trigger = index == 0
+            ? std::string{offline_translator::kExcelTriggerDoubleCtrlC}
+            : std::string{offline_translator::kExcelTriggerHotkey};
+    }
+    if (g_settings_excel_hotkey) {
+        const std::string spec =
+            to_utf8(control_text(g_settings_excel_hotkey));
+        if (const auto parsed = offline_translator::parse_hotkey(spec)) {
+            settings.excel_hotkey =
+                offline_translator::format_hotkey(*parsed);
+        } else if (
+            settings.excel_translation &&
+            settings.excel_trigger ==
+                offline_translator::kExcelTriggerHotkey) {
+            localized_message_box(
+                settings_window,
+                L"Некорректная горячая клавиша Excel. Пример: Ctrl+Alt+T",
+                L"Настройки",
+                MB_ICONWARNING | MB_OK);
+            return;
+        }
+    }
+    // Жест «двойное Ctrl+C» работает через общий Ctrl+C+C.
+    if (settings.excel_translation &&
+        settings.excel_trigger ==
+            offline_translator::kExcelTriggerDoubleCtrlC) {
+        settings.double_ctrl_c_translation = true;
+    }
+    if (g_settings_excel_method) {
+        settings.excel_write_method =
+            excel_method_from_combo(g_settings_excel_method);
+    }
     settings.ui_theme =
         g_settings_theme_dark &&
         SendMessageW(g_settings_theme_dark, BM_GETCHECK, 0, 0) == BST_CHECKED
@@ -4727,15 +6367,20 @@ void apply_settings_dialog(HWND settings_window) {
                 SendMessageW(g_settings_autostart, BM_GETCHECK, 0, 0) ==
                 BST_CHECKED;
             offline_translator::set_app_autostart(autostart);
-            if (g_runtime->main_window &&
-                !register_translate_hotkey(
-                    g_runtime->main_window,
-                    settings.translate_hotkey)) {
-                localized_message_box(
-                    settings_window,
-                    L"Не удалось зарегистрировать горячую клавишу.",
-                    L"Настройки",
-                    MB_ICONWARNING | MB_OK);
+            if (g_runtime->main_window) {
+                if (!settings.excel_translation ||
+                    settings.excel_trigger ==
+                        offline_translator::kExcelTriggerDoubleCtrlC) {
+                    UnregisterHotKey(g_runtime->main_window, kExcelHotkey);
+                } else if (!register_excel_hotkey(
+                               g_runtime->main_window,
+                               settings.excel_hotkey)) {
+                    localized_message_box(
+                        settings_window,
+                        L"Не удалось зарегистрировать горячую клавишу Excel.",
+                        L"Настройки",
+                        MB_ICONWARNING | MB_OK);
+                }
             }
         }
         store_runtime_settings(settings);
@@ -4781,11 +6426,15 @@ void close_settings_window() {
     g_settings_click_to_close = nullptr;
     g_settings_selectable = nullptr;
     g_settings_autostart = nullptr;
-    g_settings_hotkey_edit = nullptr;
     g_settings_theme_light = nullptr;
     g_settings_theme_dark = nullptr;
     g_settings_auto_copy = nullptr;
     g_settings_history_limit = nullptr;
+    g_settings_append_separator = nullptr;
+    g_settings_excel_enabled = nullptr;
+    g_settings_excel_hotkey = nullptr;
+    g_settings_excel_method = nullptr;
+    g_settings_excel_trigger = nullptr;
     g_settings_check_update = nullptr;
     g_settings_install_update = nullptr;
     g_settings_open_releases = nullptr;
@@ -5227,10 +6876,32 @@ LRESULT CALLBACK settings_proc_impl(
         content(
             kSettingsPageBehavior,
             L"STATIC",
-            L"Хранить последние копирования (1–50):",
+            L"Символ добавления к оригиналу:",
             0,
             16,
             528,
+            280,
+            20);
+        g_settings_append_separator = content(
+            kSettingsPageBehavior,
+            L"COMBOBOX",
+            nullptr,
+            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+            16,
+            550,
+            120,
+            120,
+            kSettingsAppendSeparator);
+        fill_append_separator_combo(
+            g_settings_append_separator,
+            settings.append_separator);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Хранить последние копирования (1–50):",
+            0,
+            16,
+            592,
             280,
             20);
         const int history_limit =
@@ -5242,36 +6913,17 @@ LRESULT CALLBACK settings_proc_impl(
             std::to_wstring(history_limit).c_str(),
             WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP,
             300,
-            524,
+            588,
             48,
             24,
             kSettingsHistoryLimit);
-        content(
-            kSettingsPageBehavior,
-            L"STATIC",
-            L"Горячая клавиша перевода выделения:",
-            0,
-            16,
-            560,
-            300,
-            18);
-        g_settings_hotkey_edit = content(
-            kSettingsPageBehavior,
-            L"EDIT",
-            from_utf8(settings.translate_hotkey).c_str(),
-            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-            16,
-            582,
-            240,
-            24,
-            kSettingsHotkeyEdit);
         HWND launch_title = content(
             kSettingsPageBehavior,
             L"STATIC",
             L"Запуск",
             0,
             16,
-            620,
+            636,
             200,
             26);
         SendMessageW(
@@ -5285,7 +6937,7 @@ LRESULT CALLBACK settings_proc_impl(
             L"Запускать вместе с Windows",
             BS_AUTOCHECKBOX | WS_TABSTOP,
             16,
-            650,
+            666,
             400,
             24,
             kSettingsAutostart);
@@ -5299,6 +6951,124 @@ LRESULT CALLBACK settings_proc_impl(
             BM_SETCHECK,
             autostart ? BST_CHECKED : BST_UNCHECKED,
             0);
+        // ===== Excel: перевод выделенных ячеек =====
+        HWND excel_title = content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Excel: перевод выделенных ячеек",
+            0,
+            16,
+            706,
+            470,
+            26);
+        SendMessageW(
+            excel_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        g_settings_excel_enabled = content(
+            kSettingsPageBehavior,
+            L"BUTTON",
+            L"Переводить выделенные ячейки Excel",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            736,
+            470,
+            24,
+            kSettingsExcelEnabled);
+        SendMessageW(
+            g_settings_excel_enabled,
+            BM_SETCHECK,
+            settings.excel_translation ? BST_CHECKED : BST_UNCHECKED,
+            0);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Вызов Excel-перевода:",
+            0,
+            16,
+            764,
+            300,
+            18);
+        g_settings_excel_trigger = content(
+            kSettingsPageBehavior,
+            L"COMBOBOX",
+            nullptr,
+            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+            16,
+            786,
+            260,
+            160,
+            kSettingsExcelTrigger);
+        fill_excel_trigger_combo(
+            g_settings_excel_trigger,
+            settings.excel_trigger,
+            settings.excel_hotkey);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Горячая клавиша Excel:",
+            0,
+            16,
+            814,
+            300,
+            18);
+        g_settings_excel_hotkey = content(
+            kSettingsPageBehavior,
+            L"EDIT",
+            from_utf8(settings.excel_hotkey).c_str(),
+            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+            16,
+            836,
+            240,
+            24,
+            kSettingsExcelHotkey);
+        SetWindowSubclass(
+            g_settings_excel_hotkey,
+            hotkey_capture_subclass,
+            1,
+            0);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Нажмите комбинацию в поле «Горячая клавиша Excel», чтобы задать свою.",
+            0,
+            264,
+            838,
+            222,
+            36);
+        update_excel_hotkey_field_state();
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Способ записи в Excel:",
+            0,
+            16,
+            876,
+            300,
+            18);
+        g_settings_excel_method = content(
+            kSettingsPageBehavior,
+            L"COMBOBOX",
+            nullptr,
+            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+            16,
+            898,
+            260,
+            160,
+            kSettingsExcelMethod);
+        fill_excel_method_combo(
+            g_settings_excel_method,
+            settings.excel_write_method);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Перевод добавляется к каждой выделенной ячейке через разделитель «Добавить к оригиналу». «Буфер обмена»: Excel должен быть в фокусе. «COM»: запись напрямую в открытый Excel, формулы не трогаются.",
+            0,
+            16,
+            930,
+            470,
+            54);
         // ===== Страница «Темы» =====
         HWND themes_title = content(
             kSettingsPageThemes,
@@ -5775,6 +7545,10 @@ LRESULT CALLBACK settings_proc_impl(
             update_behavior_summary();
             return 0;
         }
+        if (id == kSettingsExcelTrigger && notification == CBN_SELCHANGE) {
+            apply_excel_trigger_selection();
+            return 0;
+        }
         if (id == kSettingsSave) {
             apply_settings_dialog(window);
             return 0;
@@ -6112,6 +7886,18 @@ void create_main_controls(HWND window) {
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kScreenOcrButton)),
         nullptr,
         nullptr);
+    g_image_button = CreateWindowW(
+        L"BUTTON",
+        L"Изображение…",
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
+        282,
+        186,
+        130,
+        30,
+        window,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kImageButton)),
+        nullptr,
+        nullptr);
     g_result_edit = CreateWindowW(
         L"EDIT",
         nullptr,
@@ -6153,6 +7939,9 @@ void create_main_controls(HWND window) {
     }
     if (g_screen_ocr_button) {
         SetWindowSubclass(g_screen_ocr_button, flat_button_subclass, 2, 0);
+    }
+    if (g_image_button) {
+        SetWindowSubclass(g_image_button, flat_button_subclass, 2, 0);
     }
     apply_theme_to_window(window);
 }
@@ -6640,14 +8429,19 @@ LRESULT CALLBACK window_proc(
                 RECT text_bounds = draw->rcItem;
                 text_bounds.left += 24;
                 if (draw->itemState & ODS_CHECKED) {
-                    RECT mark = draw->rcItem;
-                    mark.right = mark.left + 22;
-                    DrawTextW(
-                        draw->hDC,
-                        L"✓",
-                        -1,
-                        &mark,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    // Галочку рисуем линиями: символ «✓» зависит от шрифта
+                    // и часто подменяется на «?».
+                    const int center =
+                        draw->rcItem.top +
+                        (draw->rcItem.bottom - draw->rcItem.top) / 2;
+                    const int left = draw->rcItem.left + 7;
+                    HPEN pen = CreatePen(PS_SOLID, 2, theme.text);
+                    HGDIOBJ old_pen = SelectObject(draw->hDC, pen);
+                    MoveToEx(draw->hDC, left, center, nullptr);
+                    LineTo(draw->hDC, left + 4, center + 5);
+                    LineTo(draw->hDC, left + 11, center - 5);
+                    SelectObject(draw->hDC, old_pen);
+                    DeleteObject(pen);
                 }
                 const std::wstring tray_label = offline_translator::tr(
                     tray_menu_label(static_cast<UINT>(draw->itemID)));
@@ -6670,6 +8464,12 @@ LRESULT CALLBACK window_proc(
             LOWORD(w_param) == kScreenOcrButton &&
             HIWORD(w_param) == BN_CLICKED) {
             start_screen_ocr(window);
+            return 0;
+        }
+        if (message == WM_COMMAND &&
+            LOWORD(w_param) == kImageButton &&
+            HIWORD(w_param) == BN_CLICKED) {
+            start_image_file_translation(window);
             return 0;
         }
         if (message == WM_COMMAND &&
@@ -6746,6 +8546,20 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayScreenOcr) {
             start_screen_ocr(window);
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayImageFile) {
+            start_image_file_translation(window);
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayImageRegion) {
+            start_image_region_translation(window);
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayFloatButton) {
+            const bool show = !(g_runtime &&
+                g_runtime->settings.image_float_button);
+            show_float_button(show);
             return 0;
         }
         if (message == kUpdateCheckDoneMessage) {
@@ -6923,6 +8737,26 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             set_status(payload->text);
             return 0;
         }
+        if (message == kExcelResultMessage) {
+            std::unique_ptr<StatusPayload> payload(
+                reinterpret_cast<StatusPayload*>(l_param));
+            set_status(payload->text);
+            show_tray_balloon(
+                L"TLing — Excel",
+                payload->text,
+                payload->failed);
+            return 0;
+        }
+        if (message == kImageResultMessage) {
+            std::unique_ptr<StatusPayload> payload(
+                reinterpret_cast<StatusPayload*>(l_param));
+            set_status(payload->text);
+            show_tray_balloon(
+                L"TLing — изображение",
+                payload->text,
+                payload->failed);
+            return 0;
+        }
         if (message == kUpdateInstallDoneMessage) {
             std::unique_ptr<UpdateInstallPayload> payload(
                 reinterpret_cast<UpdateInstallPayload*>(l_param));
@@ -6939,20 +8773,7 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             // Обновлений нет (или ошибка) — молча ничего не показываем.
             if (payload->info) {
                 g_pending_update = payload->info;
-                const std::wstring question =
-                    L"Доступна новая версия " +
-                    from_utf8(payload->info->release.title) + L" (" +
-                    from_utf8(payload->info->release.tag) + L").\n\n"
-                    L"Скачать и установить сейчас?";
-                const int answer = localized_message_box(
-                    window,
-                    question.c_str(),
-                    L"Обновление TLing",
-                    MB_ICONQUESTION | MB_YESNO);
-                if (answer == IDYES) {
-                    set_status(L"Скачивание обновления…");
-                    start_update_install();
-                }
+                show_update_popup(window, *payload->info);
             }
             return 0;
         }
@@ -7076,13 +8897,13 @@ if (message == kTranslateMessage) {
             return 0;
         }
         if (message == WM_HOTKEY &&
-            w_param == static_cast<WPARAM>(kShowWindowHotkey)) {
-            handle_translate_hotkey(window);
+            w_param == static_cast<WPARAM>(kScreenOcrHotkey)) {
+            start_screen_ocr(window);
             return 0;
         }
         if (message == WM_HOTKEY &&
-            w_param == static_cast<WPARAM>(kScreenOcrHotkey)) {
-            start_screen_ocr(window);
+            w_param == static_cast<WPARAM>(kExcelHotkey)) {
+            start_excel_translation(window);
             return 0;
         }
         if (message == WM_CLOSE) {
@@ -7102,6 +8923,11 @@ if (message == kTranslateMessage) {
             KillTimer(window, kSelectionPollTimer);
             KillTimer(window, kSelectionButtonHideTimer);
             destroy_popup_windows();
+            if (g_float_button) {
+                remove_float_tooltip();
+                DestroyWindow(g_float_button);
+                g_float_button = nullptr;
+            }
             remove_tray_icon();
             if (g_tray_icon) {
                 DestroyIcon(g_tray_icon);
@@ -7118,7 +8944,8 @@ if (message == kTranslateMessage) {
                     g_runtime->settings_window = nullptr;
                 }
             }
-            UnregisterHotKey(window, kShowWindowHotkey);
+            UnregisterHotKey(window, kScreenOcrHotkey);
+            UnregisterHotKey(window, kExcelHotkey);
             PostQuitMessage(0);
             return 0;
         }
@@ -7170,7 +8997,16 @@ int run_smoke_loop(HWND window) {
     }
     if (!g_engine_combo || !g_source_language_combo ||
         !g_target_language_combo || !g_translate_button ||
-        !g_packages_button || !g_settings_button) {
+        !g_packages_button || !g_settings_button || !g_image_button) {
+        return 1;
+    }
+    // Плавающая кнопка: создание и удаление по переключателю из трея.
+    show_float_button(true);
+    if (!IsWindow(g_float_button)) {
+        return 1;
+    }
+    show_float_button(false);
+    if (IsWindow(g_float_button)) {
         return 1;
     }
     // Окно настроек: создание, скроллбар, прокрутка и закрытие.
@@ -7316,10 +9152,14 @@ int run_popup_smoke_loop(HWND window) {
 
     g_runtime->settings.result_window_mode =
         offline_translator::kResultWindowSelectable;
+    g_selection.selected_text = L"Проверка перевода";
     show_result_popup(window, L"Проверка перевода", "ru", "en");
     if (!IsWindow(g_result_popup) || !g_popup_result_edit ||
         !g_popup_copy_button) {
         return fail("попап перевода не создан");
+    }
+    if (!g_popup_add_button) {
+        return fail("кнопка добавления к оригиналу не создана");
     }
     RECT popup_bounds{};
     GetWindowRect(g_result_popup, &popup_bounds);
@@ -7343,6 +9183,25 @@ int run_popup_smoke_loop(HWND window) {
     hide_result_popup();
     if (IsWindow(g_result_popup) || IsWindow(g_selection_button)) {
         return fail("попап или кнопка не закрылись");
+    }
+    // Окно предложения обновления: своё, в стиле приложения. Проверяем
+    // создание и закрытие по «Нет» (кнопка «Да» запустила бы загрузку).
+    {
+        offline_translator::UpdateInfo info;
+        info.release.title = "TLing Test";
+        info.release.tag = "v9.9.9";
+        show_update_popup(window, info);
+        if (!IsWindow(g_update_popup) || !g_update_popup_yes ||
+            !g_update_popup_no) {
+            return fail("окно обновления не создано");
+        }
+        if (!pump(3)) {
+            return static_cast<int>(message.wParam);
+        }
+        SendMessageW(g_update_popup, WM_COMMAND, kUpdateNoButton, 0);
+        if (IsWindow(g_update_popup)) {
+            return fail("окно обновления не закрылось по «Нет»");
+        }
     }
     DestroyWindow(window);
     return 0;
@@ -7368,8 +9227,12 @@ int WINAPI wWinMain(
                 static_cast<std::intptr_t>(-5)));
         }
     }
+    // Оба smoke-режима идут мимо единственного экземпляра и горячих клавиш:
+    // иначе запущенное приложение превращает проверки в тихий no-op.
     g_smoke_mode = command_has_flag(command_line, L"--smoke-start") ||
-        command_has_flag(GetCommandLineW(), L"--smoke-start");
+        command_has_flag(GetCommandLineW(), L"--smoke-start") ||
+        command_has_flag(command_line, L"--smoke-popup") ||
+        command_has_flag(GetCommandLineW(), L"--smoke-popup");
     g_start_minimized =
         !g_smoke_mode &&
         (command_has_flag(command_line, L"--minimized") ||
@@ -7488,6 +9351,30 @@ int WINAPI wWinMain(
         return 1;
     }
 
+    WNDCLASSW update_class{};
+    update_class.hInstance = instance;
+    update_class.lpfnWndProc = update_popup_proc;
+    update_class.lpszClassName = L"TLingUpdatePopup";
+    update_class.hCursor = LoadCursorW(
+        nullptr,
+        MAKEINTRESOURCEW(IDC_ARROW));
+    update_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    if (!RegisterClassW(&update_class)) {
+        return 1;
+    }
+
+    WNDCLASSW float_class{};
+    float_class.hInstance = instance;
+    float_class.lpfnWndProc = float_button_proc;
+    float_class.lpszClassName = kFloatButtonClass;
+    float_class.hCursor = LoadCursorW(
+        nullptr,
+        MAKEINTRESOURCEW(IDC_HAND));
+    float_class.hbrBackground = nullptr;
+    if (!RegisterClassW(&float_class)) {
+        return 1;
+    }
+
     const auto settings = offline_translator::load_settings();
     offline_translator::set_ui_language(settings.ui_language);
     offline_translator::app_log_info(
@@ -7522,24 +9409,17 @@ int WINAPI wWinMain(
     }
     g_runtime->main_window = window;
     store_runtime_settings(settings);
-    if (!g_smoke_mode &&
-        !register_translate_hotkey(window, settings.translate_hotkey)) {
-        offline_translator::app_log_error(
-            "не удалось зарегистрировать горячую клавишу " +
-            settings.translate_hotkey);
-        const std::wstring warning =
-            L"Не удалось зарегистрировать горячую клавишу " +
-            from_utf8(settings.translate_hotkey) + L".";
-        localized_message_box(
-            window,
-            warning.c_str(),
-            L"Предупреждение",
-            MB_ICONWARNING | MB_OK);
-    }
     if (!g_smoke_mode && !register_screen_ocr_hotkey(window)) {
         offline_translator::app_log_warn(
             "не удалось зарегистрировать горячую клавишу перевода области " +
             std::string(kScreenOcrHotkeySpec));
+    }
+    if (!g_smoke_mode && settings.excel_translation &&
+        settings.excel_trigger == offline_translator::kExcelTriggerHotkey &&
+        !register_excel_hotkey(window, settings.excel_hotkey)) {
+        offline_translator::app_log_warn(
+            "не удалось зарегистрировать горячую клавишу Excel " +
+            settings.excel_hotkey);
     }
     Gdiplus::GdiplusStartupInput gdiplus_input{};
     ULONG_PTR gdiplus_token = 0;
@@ -7584,6 +9464,11 @@ int WINAPI wWinMain(
         SetTimer(window, kStartupUpdateTimer, 4000, nullptr);
     }
     apply_dark_title_bar(window);
+    // Плавающую кнопку создаём после старта GDI+ (иначе иконка не
+    // загрузится и включится запасной вариант «Aa»).
+    if (g_runtime && g_runtime->settings.image_float_button) {
+        show_float_button(true, false);
+    }
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {

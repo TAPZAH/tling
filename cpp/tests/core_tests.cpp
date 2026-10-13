@@ -6,6 +6,9 @@
 #include "offline_translator/autostart.hpp"
 #include "offline_translator/clipboard.hpp"
 #include "offline_translator/clipboard_history.hpp"
+#include "offline_translator/document_export.hpp"
+#include "offline_translator/document_layout.hpp"
+#include "offline_translator/excel_cells.hpp"
 #include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
 #include "offline_translator/language_detect.hpp"
@@ -1313,6 +1316,62 @@ int main() {
         require(
             copy_roundtrip.auto_copy_selection,
             "auto_copy_selection сохраняется");
+        require(
+            missing.append_separator == " / ",
+            "append_separator по умолчанию ' / '");
+        loaded.append_separator = " - ";
+        save_settings(path, loaded);
+        require(
+            load_settings(path).append_separator == " - ",
+            "append_separator сохраняется");
+        require(
+            normalize_append_separator("??") == " / ",
+            "неизвестный append_separator становится ' / '");
+        require(
+            missing.excel_translation,
+            "excel_translation по умолчанию включён");
+        require(
+            missing.excel_hotkey == "Ctrl+Alt+T",
+            "excel_hotkey по умолчанию Ctrl+Alt+T");
+        require(
+            missing.excel_write_method == "clipboard",
+            "excel_write_method по умолчанию clipboard");
+        loaded.excel_translation = false;
+        loaded.excel_hotkey = "Ctrl+Alt+E";
+        loaded.excel_write_method = "com";
+        save_settings(path, loaded);
+        {
+            const auto excel_roundtrip = load_settings(path);
+            require(
+                !excel_roundtrip.excel_translation,
+                "excel_translation сохраняется");
+            require(
+                excel_roundtrip.excel_hotkey == "Ctrl+Alt+E",
+                "excel_hotkey сохраняется");
+            require(
+                excel_roundtrip.excel_write_method == "com",
+                "excel_write_method сохраняется");
+        }
+        require(
+            normalize_excel_write_method("??") == "clipboard",
+            "неизвестный excel_write_method становится clipboard");
+        require(
+            missing.excel_trigger == "hotkey",
+            "excel_trigger по умолчанию hotkey");
+        loaded.excel_trigger = "double_ctrl_c";
+        save_settings(path, loaded);
+        {
+            const auto gesture = load_settings(path);
+            require(
+                gesture.excel_trigger == "double_ctrl_c",
+                "excel_trigger double_ctrl_c сохраняется");
+            require(
+                gesture.double_ctrl_c_translation,
+                "жест «двойное Ctrl+C» включает Ctrl+C+C");
+        }
+        require(
+            normalize_excel_trigger("??") == "hotkey",
+            "неизвестный excel_trigger становится hotkey");
         loaded.turbo_translation = true;
         save_settings(path, loaded);
         require(
@@ -1477,6 +1536,220 @@ int main() {
         require(
             f24.has_value() && f24->vk == 0x87u,
             "верхняя граница F24 разбирается");
+    }
+
+    {
+        const auto grid = parse_excel_tsv(L"Привет\tHello\r\nМир\t");
+        require(grid.rows.size() == 2, "TSV: две строки");
+        require(
+            grid.rows[0].size() == 2 && grid.rows[1].size() == 2,
+            "TSV: по две ячейки");
+        require(
+            grid.rows[0][0] == L"Привет" && grid.rows[1][1].empty(),
+            "TSV: значения ячеек");
+        require(grid.cell_count() == 4, "TSV: число ячеек");
+        require(
+            grid.translatable_count() == 3,
+            "TSV: переводимых ячеек три");
+        require(
+            serialize_excel_tsv(grid) == L"Привет\tHello\r\nМир\t",
+            "TSV: сериализация без изменений");
+        const auto quoted =
+            parse_excel_tsv(L"\"a\tb\"\t\"say \"\"hi\"\"\"\r\n");
+        require(quoted.rows.size() == 1, "TSV: строк с кавычками одна");
+        require(
+            quoted.rows[0][0] == L"a\tb" &&
+                quoted.rows[0][1] == L"say \"hi\"",
+            "TSV: экранирование разобрано");
+        require(
+            serialize_excel_tsv(quoted) == L"\"a\tb\"\t\"say \"\"hi\"\"\"",
+            "TSV: экранирование собрано обратно");
+        require(
+            parse_excel_tsv(L"a\r\n").rows.size() == 1,
+            "TSV: завершающий перевод строки игнорируется");
+        require(
+            parse_excel_tsv(L"42\t13.10.2026\tHello").rows[0].size() == 3,
+            "TSV: строка без завершающего перевода");
+        require(
+            !excel_cell_translatable(L"12345 !!!"),
+            "число не переводим");
+        require(
+            !excel_cell_translatable(L"13.10.2026"),
+            "дату не переводим");
+        require(
+            !excel_cell_translatable(L"   "),
+            "пробелы не переводим");
+        require(
+            excel_cell_translatable(L"Hello world"),
+            "текст переводим");
+        require(
+            excel_combined_cell(L"Hello ", L"Привет", L" / ") ==
+                L"Hello / Привет",
+            "добавление к оригиналу через разделитель");
+        require(
+            excel_combined_cell(L"Hello", L"", L" / ") == L"Hello",
+            "пустой перевод не добавляется");
+        require(
+            excel_selection_supported(4, 3),
+            "обычное выделение допустимо");
+        require(
+            !excel_selection_supported(0, 0),
+            "пустое выделение недопустимо");
+        require(
+            !excel_selection_supported(kExcelMaxCells + 1, 1),
+            "гигантский диапазон недопустим");
+        require(
+            !excel_selection_supported(
+                1,
+                kExcelMaxTranslatableCells + 1),
+            "слишком много ячеек недопустимо");
+    }
+
+    {
+        OcrLayout ocr;
+        ocr.width = 1000;
+        ocr.height = 600;
+        const char* table_words[3][2] = {
+            {"Name", "Amount"},
+            {"Apple", "10"},
+            {"Pear", "20"}};
+        for (int row = 0; row < 3; ++row) {
+            for (int column = 0; column < 2; ++column) {
+                OcrWordBox box;
+                box.text = table_words[row][column];
+                box.left = column == 0 ? 50 : 500;
+                box.top = 50 + row * 40;
+                box.width = column == 0 ? 120 : 80;
+                box.height = 24;
+                box.block = 1;
+                box.paragraph = 1;
+                box.line = row;
+                box.confidence = 90;
+                ocr.words.push_back(box);
+            }
+        }
+        auto page = build_layout_page(ocr);
+        require(page.blocks.size() == 1, "layout: один абзац");
+        require(page.blocks[0].table, "layout: таблица распознана");
+        require(page.blocks[0].lines.size() == 3, "layout: три строки");
+        require(
+            page.blocks[0].lines[0].cells.size() == 2,
+            "layout: две колонки");
+        require(
+            page.blocks[0].lines[0].cells[0].text == L"Name" &&
+                page.blocks[0].lines[1].cells[1].text == L"10",
+            "layout: тексты ячеек");
+        auto texts = layout_texts(page);
+        require(texts.size() == 4, "layout: переводимых четыре");
+        apply_layout_translations(
+            &page,
+            {L"Имя", L"Сумма", L"Яблоко", L"Груша"});
+        require(
+            page.blocks[0].lines[0].cells[0].text == L"Имя" &&
+                page.blocks[0].lines[1].cells[1].text == L"10" &&
+                page.blocks[0].lines[2].cells[0].text == L"Груша",
+            "layout: переводы разложены по ячейкам");
+
+        OcrLayout multi_paragraph;
+        multi_paragraph.width = 1000;
+        multi_paragraph.height = 600;
+        for (int row = 0; row < 3; ++row) {
+            for (int column = 0; column < 2; ++column) {
+                OcrWordBox box;
+                box.text = column == 0 ? "Code" : "Value";
+                box.left = column == 0 ? 40 : 520;
+                box.top = 40 + row * 36;
+                box.width = column == 0 ? 100 : 90;
+                box.height = 22;
+                box.block = 9;
+                box.paragraph = row + 1;  // каждая строка — свой абзац
+                box.line = 1;
+                box.confidence = 90;
+                multi_paragraph.words.push_back(box);
+            }
+        }
+        const auto merged_page = build_layout_page(multi_paragraph);
+        require(
+            merged_page.blocks.size() == 1 &&
+                merged_page.blocks[0].table,
+            "layout: таблица собирается из абзацев одного блока");
+        require(
+            merged_page.blocks[0].lines.size() == 3 &&
+                merged_page.blocks[0].lines[0].cells.size() == 2,
+            "layout: у блочной таблицы три строки и две колонки");
+
+        OcrLayout plain;
+        plain.width = 600;
+        plain.height = 400;
+        for (int line = 0; line < 2; ++line) {
+            for (int word = 0; word < 2; ++word) {
+                OcrWordBox box;
+                box.text = word == 0 ? "Hello" : "world";
+                box.left = 50 + word * 60;
+                box.top = 40 + line * 30;
+                box.width = 50;
+                box.height = 20;
+                box.block = 2;
+                box.paragraph = 1;
+                box.line = line;
+                box.confidence = 90;
+                plain.words.push_back(box);
+            }
+        }
+        const auto plain_page = build_layout_page(plain);
+        require(
+            !plain_page.blocks[0].table,
+            "layout: обычный абзац без таблицы");
+        require(
+            plain_page.blocks[0].lines[1].cells[0].text ==
+                L"Hello world",
+            "layout: строка обычного абзаца цела");
+
+        const auto export_dir =
+            std::filesystem::temp_directory_path() /
+            "offline-translator-export-test";
+        std::filesystem::remove_all(export_dir);
+        std::filesystem::create_directories(export_dir);
+        const auto docx_path = export_dir / "page.docx";
+        export_layout_page(page, docx_path);
+        require(
+            fs_utils::is_regular_file(docx_path),
+            "docx: файл создан");
+        const auto docx_tree = export_dir / "docx";
+        extract_zip(docx_path, docx_tree);
+        std::string document_xml;
+        {
+            std::ifstream in(docx_tree / "word" / "document.xml");
+            document_xml.assign(
+                (std::istreambuf_iterator<char>(in)),
+                std::istreambuf_iterator<char>());
+        }
+        require(
+            document_xml.find("w:tbl") != std::string::npos,
+            "docx: таблица записана");
+        require(
+            document_xml.find("Яблоко") != std::string::npos,
+            "docx: перевод записан");
+        const auto xlsx_path = export_dir / "page.xlsx";
+        export_layout_page(page, xlsx_path);
+        require(
+            fs_utils::is_regular_file(xlsx_path),
+            "xlsx: файл создан");
+        const auto xlsx_tree = export_dir / "xlsx";
+        extract_zip(xlsx_path, xlsx_tree);
+        std::string sheet_xml;
+        {
+            std::ifstream in(
+                xlsx_tree / "xl" / "worksheets" / "sheet1.xml");
+            sheet_xml.assign(
+                (std::istreambuf_iterator<char>(in)),
+                std::istreambuf_iterator<char>());
+        }
+        require(
+            sheet_xml.find("inlineStr") != std::string::npos &&
+                sheet_xml.find("Груша") != std::string::npos,
+            "xlsx: ячейки записаны");
+        std::filesystem::remove_all(export_dir);
     }
 
     {

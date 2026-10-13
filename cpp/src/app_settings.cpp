@@ -147,6 +147,17 @@ std::string read_translate_hotkey(const nlohmann::json& data) {
     return std::string{kDefaultTranslateHotkey};
 }
 
+std::string read_excel_hotkey(const nlohmann::json& data) {
+    const auto spec = read_string(
+        data,
+        "excel_hotkey",
+        std::string{kDefaultExcelHotkey});
+    if (const auto parsed = parse_hotkey(spec)) {
+        return format_hotkey(*parsed);
+    }
+    return std::string{kDefaultExcelHotkey};
+}
+
 std::string read_ui_theme(const nlohmann::json& data) {
     return normalize_ui_theme(read_string(data, "ui_theme", "light"));
 }
@@ -242,6 +253,25 @@ AppSettings load_settings(const std::filesystem::path& path) {
                 data,
                 "clipboard_history_limit",
                 kDefaultClipboardHistoryLimit));
+        settings.append_separator = normalize_append_separator(
+            read_string(data, "append_separator", " / "));
+        settings.excel_translation =
+            read_bool(data, "excel_translation", true);
+        settings.excel_trigger = normalize_excel_trigger(
+            read_string(data, "excel_trigger", "hotkey"));
+        settings.excel_hotkey = read_excel_hotkey(data);
+        settings.excel_write_method = normalize_excel_write_method(
+            read_string(data, "excel_write_method", "clipboard"));
+        settings.image_float_button =
+            read_bool(data, "image_float_button", false);
+        settings.image_float_button_x =
+            read_int(data, "image_float_button_x", -1);
+        settings.image_float_button_y =
+            read_int(data, "image_float_button_y", -1);
+        // Жест «двойное Ctrl+C» работает через общий Ctrl+C+C: включаем его.
+        if (settings.excel_trigger == kExcelTriggerDoubleCtrlC) {
+            settings.double_ctrl_c_translation = true;
+        }
     } catch (...) {
         return AppSettings{};
     }
@@ -273,8 +303,10 @@ void save_settings(
         normalize_popup_modifier(settings.popup_modifier);
     const bool popup_requires_ctrl = popup_modifier == kPopupModifierCtrl;
     const bool selection_popup_enabled = settings.selection_popup_enabled;
+    const auto excel_trigger = normalize_excel_trigger(settings.excel_trigger);
     const bool double_ctrl_c_translation =
-        selection_popup_enabled ? settings.double_ctrl_c_translation : true;
+        (selection_popup_enabled ? settings.double_ctrl_c_translation : true) ||
+        excel_trigger == kExcelTriggerDoubleCtrlC;
     data["popup_requires_ctrl"] = popup_requires_ctrl;
     data["popup_modifier"] = popup_modifier;
     data["double_ctrl_c_translation"] = double_ctrl_c_translation;
@@ -292,6 +324,16 @@ void save_settings(
     data["check_updates_on_startup"] = settings.check_updates_on_startup;
     data["clipboard_history_limit"] =
         normalize_clipboard_history_limit(settings.clipboard_history_limit);
+    data["append_separator"] =
+        normalize_append_separator(settings.append_separator);
+    data["excel_translation"] = settings.excel_translation;
+    data["excel_trigger"] = excel_trigger;
+    data["excel_hotkey"] = settings.excel_hotkey;
+    data["excel_write_method"] =
+        normalize_excel_write_method(settings.excel_write_method);
+    data["image_float_button"] = settings.image_float_button;
+    data["image_float_button_x"] = settings.image_float_button_x;
+    data["image_float_button_y"] = settings.image_float_button_y;
     fs_utils::write_text_file(path, data.dump(2) + "\n");
 }
 
@@ -316,6 +358,30 @@ std::string normalize_ui_theme(std::string_view theme) {
         return std::string{kUiThemeDark};
     }
     return std::string{kUiThemeLight};
+}
+
+std::string normalize_append_separator(std::string_view separator) {
+    if (separator == kAppendSeparatorDash) {
+        return std::string{kAppendSeparatorDash};
+    }
+    return std::string{kAppendSeparatorSlash};
+}
+
+std::string normalize_excel_write_method(std::string_view method) {
+    if (method == kExcelWriteCom) {
+        return std::string{kExcelWriteCom};
+    }
+    if (method == kExcelWriteAuto) {
+        return std::string{kExcelWriteAuto};
+    }
+    return std::string{kExcelWriteClipboard};
+}
+
+std::string normalize_excel_trigger(std::string_view trigger) {
+    if (trigger == kExcelTriggerDoubleCtrlC) {
+        return std::string{kExcelTriggerDoubleCtrlC};
+    }
+    return std::string{kExcelTriggerHotkey};
 }
 
 std::string settings_engine_name(EngineKind engine_kind) {

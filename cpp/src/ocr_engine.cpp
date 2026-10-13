@@ -10,6 +10,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -136,6 +138,119 @@ void trim_trailing_whitespace(std::string& text) {
     }
 }
 
+// Подготовка данных для Tesseract: BGRA переводим в градации серого,
+// серое отдаём как есть.
+struct GrayImage {
+    std::vector<std::uint8_t> storage;
+    const std::uint8_t* data{nullptr};
+    int bytes_per_line{0};
+};
+
+GrayImage make_gray_image(
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel) {
+    if (bytes_per_pixel == 1) {
+        return GrayImage{{}, image, bytes_per_line};
+    }
+    if (bytes_per_pixel == 4) {
+        GrayImage result;
+        result.storage = bgra_to_gray(image, width, height, bytes_per_line);
+        result.data = result.storage.data();
+        result.bytes_per_line = width;
+        return result;
+    }
+    throw std::invalid_argument(
+        "OCR: поддерживаются 1 (серый) или 4 (BGRA) байта на пиксель");
+}
+
+// TSV Tesseract: level page block par line word left top width height conf text.
+OcrLayout parse_tsv_layout(const char* tsv, int width, int height) {
+    OcrLayout layout;
+    layout.width = width;
+    layout.height = height;
+    if (tsv == nullptr) {
+        return layout;
+    }
+    const std::string text(tsv);
+    std::size_t position = 0;
+    bool header = true;
+    const auto to_int = [](const std::string& value) {
+        try {
+            return std::stoi(value);
+        } catch (...) {
+            return 0;
+        }
+    };
+    const auto to_double = [](const std::string& value) {
+        try {
+            return std::stod(value);
+        } catch (...) {
+            return 0.0;
+        }
+    };
+    while (position <= text.size()) {
+        std::size_t end = text.find('\n', position);
+        if (end == std::string::npos) {
+            end = text.size();
+        }
+        std::string row = text.substr(position, end - position);
+        position = end + 1;
+        if (!row.empty() && row.back() == '\r') {
+            row.pop_back();
+        }
+        if (row.empty()) {
+            if (end == text.size()) {
+                break;
+            }
+            continue;
+        }
+        if (header) {
+            header = false;
+            continue;
+        }
+        std::array<std::string, 12> fields{};
+        std::size_t begin = 0;
+        std::size_t field = 0;
+        for (std::size_t index = 0;
+             index < row.size() && field < 11;
+             ++index) {
+            if (row[index] == '\t') {
+                fields[field++] = row.substr(begin, index - begin);
+                begin = index + 1;
+            }
+        }
+        fields[field] = row.substr(begin);
+        if (field < 11) {
+            continue;
+        }
+        if (to_int(fields[0]) != 5) {
+            continue;
+        }
+        OcrWordBox word;
+        word.block = to_int(fields[2]);
+        word.paragraph = to_int(fields[3]);
+        word.line = to_int(fields[4]);
+        word.left = to_int(fields[6]);
+        word.top = to_int(fields[7]);
+        word.width = to_int(fields[8]);
+        word.height = to_int(fields[9]);
+        word.confidence = to_double(fields[10]);
+        word.text = fields[11];
+        if (word.text.empty() || word.left < 0 || word.top < 0 ||
+            word.width <= 0 || word.height <= 0) {
+            continue;
+        }
+        layout.words.push_back(std::move(word));
+        if (end == text.size()) {
+            break;
+        }
+    }
+    return layout;
+}
+
 }  // namespace
 
 std::string tesseract_language_code(std::string_view code) {
@@ -238,6 +353,49 @@ void OcrEngine::initialize(std::string_view language_code) {
     impl_->initialized = true;
 }
 
+void OcrEngine::initialize_multi(
+    const std::vector<std::string>& language_codes) {
+    if (language_codes.empty()) {
+        throw std::runtime_error("Не задан язык OCR");
+    }
+    std::string spec;
+    std::string cache_key;
+    for (const auto& code : language_codes) {
+        const std::string tesseract_code = tesseract_language_code(code);
+        if (!spec.empty()) {
+            spec += "+";
+        }
+        spec += tesseract_code;
+        if (!cache_key.empty()) {
+            cache_key += "+";
+        }
+        cache_key += code;
+    }
+    if (impl_->initialized && impl_->language_code == cache_key) {
+        return;
+    }
+    reset();
+    for (const auto& code : language_codes) {
+        const auto data_file =
+            impl_->tessdata_root / tessdata_file_name(code);
+        if (impl_->tessdata_root.empty() ||
+            !fs_utils::is_regular_file(data_file) ||
+            fs_utils::file_size_or_zero(data_file) == 0) {
+            throw std::runtime_error(
+                "Нет языковых данных OCR для «" + code + "»: " +
+                data_file.string() + ". Скачайте их (файл " +
+                tessdata_file_name(code) + ").");
+        }
+    }
+    const std::string datapath = impl_->tessdata_root.string();
+    if (impl_->api.Init(datapath.c_str(), spec.c_str()) != 0) {
+        throw std::runtime_error(
+            "Не удалось загрузить языковые данные OCR («" + spec + "»).");
+    }
+    impl_->language_code = cache_key;
+    impl_->initialized = true;
+}
+
 void OcrEngine::reset() {
     if (!impl_) {
         return;
@@ -271,21 +429,14 @@ OcrResult OcrEngine::recognize(
         throw std::invalid_argument("OCR: пустое изображение");
     }
 
-    std::vector<std::uint8_t> gray;
-    const std::uint8_t* data = image;
-    int line = bytes_per_line;
-    if (bytes_per_pixel == 1) {
-        // Уже градации серого — передаём как есть.
-    } else if (bytes_per_pixel == 4) {
-        gray = bgra_to_gray(image, width, height, bytes_per_line);
-        data = gray.data();
-        line = width;
-    } else {
-        throw std::invalid_argument(
-            "OCR: поддерживаются 1 (серый) или 4 (BGRA) байта на пиксель");
-    }
+    const GrayImage gray = make_gray_image(
+        image,
+        width,
+        height,
+        bytes_per_line,
+        bytes_per_pixel);
 
-    impl_->api.SetImage(data, width, height, 1, line);
+    impl_->api.SetImage(gray.data, width, height, 1, gray.bytes_per_line);
     if (impl_->api.Recognize(nullptr) != 0) {
         impl_->api.Clear();
         throw std::runtime_error("OCR: распознавание не удалось");
@@ -302,6 +453,206 @@ OcrResult OcrEngine::recognize(
     return OcrResult{
         std::move(text),
         confidence < 0 ? 0.0 : static_cast<double>(confidence)};
+}
+
+OcrLayout OcrEngine::recognize_layout(
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel) {
+    if (!impl_->initialized) {
+        throw std::runtime_error(
+            "OCR не инициализирован: сначала вызовите initialize()");
+    }
+    if (image == nullptr || width <= 0 || height <= 0 || bytes_per_line <= 0) {
+        throw std::invalid_argument("OCR: пустое изображение");
+    }
+
+    const GrayImage gray = make_gray_image(
+        image,
+        width,
+        height,
+        bytes_per_line,
+        bytes_per_pixel);
+
+    impl_->api.SetImage(gray.data, width, height, 1, gray.bytes_per_line);
+    if (impl_->api.Recognize(nullptr) != 0) {
+        impl_->api.Clear();
+        throw std::runtime_error("OCR: распознавание не удалось");
+    }
+
+    char* tsv = impl_->api.GetTSVText(0);
+    OcrLayout layout = parse_tsv_layout(tsv, width, height);
+    delete[] tsv;
+    impl_->api.Clear();
+    return layout;
+}
+
+namespace {
+
+// Поворот BGRA на 90/180/270. Для других форматов поворот не поддержан.
+std::vector<std::uint8_t> rotate_bgra(
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int rotation,
+    int* out_width,
+    int* out_height) {
+    std::vector<std::uint8_t> result;
+    const auto source = [&](int x, int y) {
+        return image + static_cast<std::size_t>(y) * bytes_per_line +
+            static_cast<std::size_t>(x) * 4;
+    };
+    if (rotation == 180) {
+        *out_width = width;
+        *out_height = height;
+        result.resize(
+            static_cast<std::size_t>(width) *
+            static_cast<std::size_t>(height) * 4);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                std::uint8_t* target = result.data() +
+                    (static_cast<std::size_t>(height - 1 - y) * width +
+                     (width - 1 - x)) * 4;
+                std::memcpy(target, source(x, y), 4);
+            }
+        }
+        return result;
+    }
+    *out_width = height;
+    *out_height = width;
+    result.resize(
+        static_cast<std::size_t>(width) *
+        static_cast<std::size_t>(height) * 4);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            std::size_t target_index = 0;
+            if (rotation == 90) {
+                target_index = static_cast<std::size_t>(x) * height +
+                    static_cast<std::size_t>(height - 1 - y);
+            } else {
+                target_index = static_cast<std::size_t>(width - 1 - x) *
+                    height + static_cast<std::size_t>(y);
+            }
+            std::memcpy(result.data() + target_index * 4, source(x, y), 4);
+        }
+    }
+    return result;
+}
+
+}  // анонимное пространство имён
+
+std::vector<std::uint8_t> rotate_bgra_image(
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int rotation,
+    int* out_width,
+    int* out_height) {
+    if (rotation == 0) {
+        if (out_width != nullptr) {
+            *out_width = width;
+        }
+        if (out_height != nullptr) {
+            *out_height = height;
+        }
+        std::vector<std::uint8_t> result(
+            static_cast<std::size_t>(width) *
+            static_cast<std::size_t>(height) * 4);
+        for (int y = 0; y < height; ++y) {
+            std::memcpy(
+                result.data() + static_cast<std::size_t>(y) * width * 4,
+                image + static_cast<std::size_t>(y) * bytes_per_line,
+                static_cast<std::size_t>(width) * 4);
+        }
+        return result;
+    }
+    return rotate_bgra(
+        image,
+        width,
+        height,
+        bytes_per_line,
+        rotation,
+        out_width,
+        out_height);
+}
+
+OcrLayout recognize_best_orientation(
+    OcrEngine& engine,
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel,
+    int* rotation_degrees) {
+    if (rotation_degrees != nullptr) {
+        *rotation_degrees = 0;
+    }
+    if (image == nullptr || width <= 0 || height <= 0 ||
+        bytes_per_line <= 0) {
+        throw std::invalid_argument("OCR: пустое изображение");
+    }
+    OcrLayout best;
+    int best_score = -1;
+    const int rotations[4] = {0, 90, 270, 180};
+    for (const int rotation : rotations) {
+        if (bytes_per_pixel != 4 && rotation != 0) {
+            break;
+        }
+        int rotated_width = width;
+        int rotated_height = height;
+        int stride = bytes_per_line;
+        const std::uint8_t* data = image;
+        std::vector<std::uint8_t> rotated;
+        if (rotation != 0) {
+            rotated = rotate_bgra(
+                image,
+                width,
+                height,
+                bytes_per_line,
+                rotation,
+                &rotated_width,
+                &rotated_height);
+            data = rotated.data();
+            stride = rotated_width * 4;
+        }
+        OcrLayout layout = engine.recognize_layout(
+            data,
+            rotated_width,
+            rotated_height,
+            stride,
+            bytes_per_pixel);
+        int confident_words = 0;
+        double confidence_sum = 0.0;
+        for (const auto& word : layout.words) {
+            if (word.confidence > 0.0) {
+                ++confident_words;
+                confidence_sum += word.confidence;
+            }
+        }
+        // Средняя уверенность важнее количества: на повёрнутом мусоре
+        // Tesseract выдаёт много слов, но с низкой уверенностью.
+        const double average = confident_words > 0
+            ? confidence_sum / confident_words
+            : 0.0;
+        const int score = static_cast<int>(average * 1000.0) +
+            std::min(confident_words, 999);
+        if (score > best_score) {
+            best_score = score;
+            best = std::move(layout);
+            if (rotation_degrees != nullptr) {
+                *rotation_degrees = rotation;
+            }
+        }
+        // Уверенно распознали без поворота — остальные углы не нужны.
+        if (rotation == 0 && average >= 75.0 && confident_words >= 2) {
+            break;
+        }
+    }
+    return best;
 }
 
 }  // namespace offline_translator

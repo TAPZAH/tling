@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace offline_translator {
 
@@ -14,6 +15,26 @@ namespace offline_translator {
 struct OcrResult {
     std::string text;
     double confidence{0.0};
+};
+
+// Слово с координатами в пикселях изображения, отданного в OCR.
+struct OcrWordBox {
+    std::string text;
+    int left{0};
+    int top{0};
+    int width{0};
+    int height{0};
+    int block{0};
+    int paragraph{0};
+    int line{0};
+    double confidence{0.0};
+};
+
+// Разметка страницы: слова в порядке обхода.
+struct OcrLayout {
+    int width{0};
+    int height{0};
+    std::vector<OcrWordBox> words;
 };
 
 // ISO-код приложения (en, zh, zt, ...) → код языка Tesseract (eng, chi_sim,
@@ -57,6 +78,9 @@ public:
     // Загружает язык в Tesseract. Повторный вызов с тем же языком — no-op.
     // Бросает std::runtime_error, если нет языковых данных или Init не удался.
     void initialize(std::string_view language_code);
+    // Загрузка сразу нескольких языков (Tesseract «eng+rus»): нужно для
+    // автоопределения при распознавании изображения. Требует данные всех.
+    void initialize_multi(const std::vector<std::string>& language_codes);
     // Выгружает текущий язык, освобождая данные Tesseract.
     void reset();
     bool is_initialized() const;
@@ -73,9 +97,40 @@ public:
         int bytes_per_line,
         int bytes_per_pixel);
 
+    // То же распознавание, но с координатами слов (TSV Tesseract): нужно
+    // для восстановления разметки страницы (абзацы, колонки, таблицы).
+    OcrLayout recognize_layout(
+        const std::uint8_t* image,
+        int width,
+        int height,
+        int bytes_per_line,
+        int bytes_per_pixel);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+// Распознаёт текст, подбирая поворот изображения (0/90/180/270): сканы
+// часто перевёрнуты. rotation_degrees (если задан) получает лучший угол.
+OcrLayout recognize_best_orientation(
+    OcrEngine& engine,
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel,
+    int* rotation_degrees = nullptr);
+
+// Поворот BGRA-изображения (0/90/180/270). Для других форматов — копия
+// исходных данных без поворота.
+std::vector<std::uint8_t> rotate_bgra_image(
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int rotation,
+    int* out_width,
+    int* out_height);
 
 }  // namespace offline_translator

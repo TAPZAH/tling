@@ -1,4 +1,5 @@
 # Build-артефакты C++ (кэши CMake/MSVC, портативы, установщик)
+cpp/build/
 cpp/build-*/
 cpp/portable/
 cpp/portable-lite/

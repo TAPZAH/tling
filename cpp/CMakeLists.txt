@@ -119,6 +119,9 @@ add_library(offline_translator_core
     src/clipboard.cpp
     src/clipboard_history.cpp
     src/compression.cpp
+    src/document_export.cpp
+    src/document_layout.cpp
+    src/excel_cells.cpp
     src/file_transfer.cpp
     src/firefox_engine.cpp
     src/firefox_model_manager.cpp
@@ -191,6 +194,8 @@ if (ENABLE_CTRANSLATE2)
         add_executable(TLing WIN32
             app/win32_main.cpp
             app/screen_ocr.cpp
+            app/excel_com.cpp
+            app/image_file.cpp
             app/tling.rc
         )
     endif()
@@ -297,6 +302,8 @@ if (ENABLE_CTRANSLATE2)
                 gdi32
                 comctl32
                 dwmapi
+                ole32
+                oleaut32
         )
         offline_translator_deploy_ocr_runtime(TLing)
         set(_app_ico "${CMAKE_CURRENT_SOURCE_DIR}/../assets/app.ico")
@@ -484,6 +491,45 @@ if (ENABLE_CTRANSLATE2)
         absl::log
         absl::flags
     )
+endif()
+
+if (WIN32)
+    add_executable(excel_com_tests
+        tests/excel_com_tests.cpp
+        app/excel_com.cpp
+    )
+    target_include_directories(excel_com_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/app
+    )
+    target_link_libraries(excel_com_tests PRIVATE ole32 oleaut32)
+    if (MSVC)
+        target_compile_options(excel_com_tests PRIVATE /EHsc /permissive- /utf-8)
+    endif()
+    add_test(NAME excel_com_tests COMMAND excel_com_tests)
+endif()
+
+if (WIN32)
+    add_executable(image_layout_tests
+        tests/image_layout_tests.cpp
+        app/image_file.cpp
+    )
+    target_include_directories(image_layout_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/app
+    )
+    target_link_libraries(image_layout_tests
+        PRIVATE
+            offline_translator_core
+            gdiplus
+    )
+    offline_translator_deploy_ocr_runtime(image_layout_tests)
+    if (MSVC)
+        target_compile_options(image_layout_tests PRIVATE /EHsc /permissive- /utf-8)
+    endif()
+    add_test(NAME image_layout_tests COMMAND image_layout_tests)
 endif()
 
 if (ENABLE_CTRANSLATE2 AND WIN32)
