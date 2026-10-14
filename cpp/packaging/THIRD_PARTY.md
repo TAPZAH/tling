@@ -22,6 +22,12 @@
 | [SentencePiece](https://github.com/google/sentencepiece) | Apache-2.0 | vcpkg `share/sentencepiece/copyright` (статически связан) |
 | [nlohmann/json](https://github.com/nlohmann/json) | MIT | vcpkg `share/nlohmann-json/copyright` (header-only) |
 | utf8_range (зависимость protobuf) | как у protobuf | vcpkg `share/utf8-range/copyright` |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT | `third_party/onnxruntime/licenses/LICENSE-ONNXRuntime.txt` |
+| Модели [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (PP-OCR, ONNX) | Apache-2.0 | `third_party/ppocr/LICENSE.txt` |
+
+OCR на PaddleOCR (PP-OCR) выполняется библиотекой ONNX Runtime; модели
+детектора и распознавателей лежат в `data/ppocr/` и распространяются на
+условиях Apache-2.0 (PaddleOCR). Без этих моделей OCR работает на Tesseract.
 
 Модели Argos Translate и NLLB-200, если вы кладёте их в `data/`,
 распространяются на условиях их авторов (не часть MIT-лицензии приложения).

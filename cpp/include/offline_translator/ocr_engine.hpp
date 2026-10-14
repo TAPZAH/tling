@@ -11,6 +11,17 @@
 
 namespace offline_translator {
 
+// Движок OCR: Tesseract (по умолчанию) или PaddleOCR (PP-OCR/ONNX Runtime).
+enum class OcrBackend { Tesseract, Paddle };
+
+// Глобальный выбор движка OCR. ppocr_root — каталог моделей PaddleOCR
+// (пусто — поиск по стандартным путям). В сборках без Paddle настройка
+// игнорируется, остаётся Tesseract.
+void set_ocr_backend(OcrBackend backend, std::filesystem::path ppocr_root = {});
+OcrBackend ocr_backend();
+// Готов ли Paddle-бэкенд: выбран и модели установлены.
+bool ocr_paddle_ready();
+
 // Результат распознавания: текст и средняя уверенность по словам (0..100).
 struct OcrResult {
     std::string text;
@@ -105,6 +116,18 @@ public:
         int height,
         int bytes_per_line,
         int bytes_per_pixel);
+
+    // Активен ли Paddle-бэкенд для этого экземпляра.
+    bool uses_paddle() const;
+    // recognize_layout с подбором ориентации (Paddle — моделью doc_ori,
+    // Tesseract — перебором углов через recognize_best_orientation).
+    OcrLayout recognize_layout_oriented(
+        const std::uint8_t* image,
+        int width,
+        int height,
+        int bytes_per_line,
+        int bytes_per_pixel,
+        int* rotation_degrees = nullptr);
 
 private:
     struct Impl;

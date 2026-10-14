@@ -6,6 +6,10 @@
 #include "file_transfer.hpp"
 #include "fs_utils.hpp"
 
+#ifdef OT_PADDLE_OCR
+#include "offline_translator/paddle_ocr.hpp"
+#endif
+
 #include <tesseract/baseapi.h>
 
 #include <cstddef>
@@ -18,6 +22,53 @@
 #include <vector>
 
 namespace offline_translator {
+namespace {
+
+OcrBackend g_ocr_backend = OcrBackend::Tesseract;
+std::filesystem::path g_ppocr_root;
+
+}  // namespace
+
+void set_ocr_backend(OcrBackend backend, std::filesystem::path ppocr_root) {
+    g_ocr_backend = backend;
+    g_ppocr_root = std::move(ppocr_root);
+}
+
+OcrBackend ocr_backend() {
+    return g_ocr_backend;
+}
+
+bool ocr_paddle_ready() {
+#ifdef OT_PADDLE_OCR
+    return g_ocr_backend == OcrBackend::Paddle && ppocr_installed(g_ppocr_root);
+#else
+    return false;
+#endif
+}
+
+namespace {
+
+// Поддерживает ли Paddle (PP-OCR) язык: есть распознаватель для его скрипта.
+bool paddle_supports_language(std::string_view code) {
+#ifdef OT_PADDLE_OCR
+    return !ppocr_script_for_language(code).empty();
+#else
+    (void)code;
+    return false;
+#endif
+}
+
+bool paddle_supports_all(const std::vector<std::string>& codes) {
+    for (const auto& code : codes) {
+        if (!paddle_supports_language(code)) {
+            return false;
+        }
+    }
+    return !codes.empty();
+}
+
+}  // namespace
+
 namespace {
 
 // ISO-код приложения → код языковых данных Tesseract. Совпадает с
@@ -314,6 +365,10 @@ struct OcrEngine::Impl {
     tesseract::TessBaseAPI api;
     std::string language_code;
     bool initialized{false};
+    bool paddle_mode{false};
+#ifdef OT_PADDLE_OCR
+    std::unique_ptr<PaddleOcrEngine> paddle;
+#endif
 };
 
 OcrEngine::OcrEngine(std::filesystem::path tessdata_root)
@@ -328,6 +383,17 @@ OcrEngine::~OcrEngine() {
 }
 
 void OcrEngine::initialize(std::string_view language_code) {
+#ifdef OT_PADDLE_OCR
+    if (ocr_paddle_ready() && paddle_supports_language(language_code)) {
+        if (!impl_->paddle) {
+            impl_->paddle = std::make_unique<PaddleOcrEngine>(g_ppocr_root);
+        }
+        impl_->paddle->initialize(language_code);
+        impl_->paddle_mode = true;
+        impl_->language_code = std::string(language_code);
+        return;
+    }
+#endif
     const std::string tesseract_code = tesseract_language_code(language_code);
     if (impl_->initialized && impl_->language_code == std::string(language_code)) {
         return;
@@ -359,6 +425,23 @@ void OcrEngine::initialize_multi(
     if (language_codes.empty()) {
         throw std::runtime_error("Не задан язык OCR");
     }
+#ifdef OT_PADDLE_OCR
+    if (ocr_paddle_ready() && paddle_supports_all(language_codes)) {
+        if (!impl_->paddle) {
+            impl_->paddle = std::make_unique<PaddleOcrEngine>(g_ppocr_root);
+        }
+        impl_->paddle->initialize_multi(language_codes);
+        impl_->paddle_mode = true;
+        impl_->language_code = impl_->paddle->language_code();
+        app_log_info(
+            "paddle OCR: languages=" + impl_->language_code);
+        return;
+    }
+    if (ocr_paddle_ready()) {
+        app_log_info(
+            "paddle OCR: языки без распознавателя PP-OCR — откат на Tesseract");
+    }
+#endif
     std::string spec;
     std::string cache_key;
     for (const auto& code : language_codes) {
@@ -407,10 +490,27 @@ void OcrEngine::reset() {
     }
     impl_->initialized = false;
     impl_->language_code.clear();
+#ifdef OT_PADDLE_OCR
+    if (impl_->paddle) {
+        impl_->paddle->reset();
+    }
+#endif
+    impl_->paddle_mode = false;
 }
 
 bool OcrEngine::is_initialized() const {
+    if (impl_ && impl_->paddle_mode) {
+#ifdef OT_PADDLE_OCR
+        return impl_->paddle && impl_->paddle->is_initialized();
+#else
+        return false;
+#endif
+    }
     return impl_ && impl_->initialized;
+}
+
+bool OcrEngine::uses_paddle() const {
+    return impl_ && impl_->paddle_mode;
 }
 
 std::string OcrEngine::language_code() const {
@@ -423,6 +523,29 @@ OcrResult OcrEngine::recognize(
     int height,
     int bytes_per_line,
     int bytes_per_pixel) {
+#ifdef OT_PADDLE_OCR
+    if (impl_->paddle_mode && impl_->paddle) {
+        const OcrLayout layout = impl_->paddle->recognize_layout(
+            image, width, height, bytes_per_line, bytes_per_pixel);
+        OcrResult result;
+        double confidence_sum = 0.0;
+        int confident = 0;
+        int previous_line = -1;
+        for (const auto& word : layout.words) {
+            if (!result.text.empty()) {
+                result.text += word.line == previous_line ? ' ' : '\n';
+            }
+            result.text += word.text;
+            previous_line = word.line;
+            if (word.confidence > 0.0) {
+                confidence_sum += word.confidence;
+                ++confident;
+            }
+        }
+        result.confidence = confident > 0 ? confidence_sum / confident : 0.0;
+        return result;
+    }
+#endif
     if (!impl_->initialized) {
         throw std::runtime_error(
             "OCR не инициализирован: сначала вызовите initialize()");
@@ -463,6 +586,12 @@ OcrLayout OcrEngine::recognize_layout(
     int height,
     int bytes_per_line,
     int bytes_per_pixel) {
+#ifdef OT_PADDLE_OCR
+    if (impl_->paddle_mode && impl_->paddle) {
+        return impl_->paddle->recognize_layout(
+            image, width, height, bytes_per_line, bytes_per_pixel);
+    }
+#endif
     if (!impl_->initialized) {
         throw std::runtime_error(
             "OCR не инициализирован: сначала вызовите initialize()");
@@ -489,6 +618,30 @@ OcrLayout OcrEngine::recognize_layout(
     delete[] tsv;
     impl_->api.Clear();
     return layout;
+}
+
+OcrLayout OcrEngine::recognize_layout_oriented(
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel,
+    int* rotation_degrees) {
+#ifdef OT_PADDLE_OCR
+    if (impl_->paddle_mode && impl_->paddle) {
+        return impl_->paddle->recognize_layout_oriented(
+            image,
+            width,
+            height,
+            bytes_per_line,
+            bytes_per_pixel,
+            rotation_degrees);
+    }
+#endif
+    if (rotation_degrees != nullptr) {
+        *rotation_degrees = 0;
+    }
+    return recognize_layout(image, width, height, bytes_per_line, bytes_per_pixel);
 }
 
 namespace {
@@ -596,6 +749,15 @@ OcrLayout recognize_best_orientation(
     if (image == nullptr || width <= 0 || height <= 0 ||
         bytes_per_line <= 0) {
         throw std::invalid_argument("OCR: пустое изображение");
+    }
+    if (engine.uses_paddle()) {
+        return engine.recognize_layout_oriented(
+            image,
+            width,
+            height,
+            bytes_per_line,
+            bytes_per_pixel,
+            rotation_degrees);
     }
     OcrLayout best;
     int best_score = -1;

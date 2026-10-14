@@ -3,6 +3,7 @@
 #include "offline_translator/excel_cells.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <map>
 
 #ifdef _WIN32
@@ -95,10 +96,87 @@ LayoutCell make_line_cell(
     LayoutCell cell;
     cell.text = join_words(words, font_height);
     if (!words.empty()) {
-        cell.left = words.front()->left;
-        cell.right = words.back()->right;
+        int left = words.front()->left;
+        int right = words.front()->right;
+        for (const WordInfo* word : words) {
+            left = std::min(left, word->left);
+            right = std::max(right, word->right);
+        }
+        cell.left = left;
+        cell.right = right;
     }
     return cell;
+}
+
+// Делит строку на ячейки по границам колонок (последняя забирает остаток).
+std::vector<LayoutCell> split_line_by_columns(
+    const std::vector<const WordInfo*>& line_words,
+    const std::vector<int>& columns,
+    int font_height) {
+    std::vector<LayoutCell> cells;
+    std::size_t word_index = 0;
+    int column = 0;
+    while (word_index < line_words.size()) {
+        std::vector<const WordInfo*> cell_words;
+        const int boundary = column < static_cast<int>(columns.size())
+            ? columns[static_cast<std::size_t>(column)]
+            : 0;
+        while (word_index < line_words.size()) {
+            if (column < static_cast<int>(columns.size()) &&
+                line_words[word_index]->left > boundary) {
+                break;
+            }
+            cell_words.push_back(line_words[word_index]);
+            ++word_index;
+        }
+        cells.push_back(make_line_cell(cell_words, font_height));
+        ++column;
+        if (column > static_cast<int>(columns.size())) {
+            while (word_index < line_words.size()) {
+                const WordInfo* word = line_words[word_index];
+                if (cells.back().text.empty()) {
+                    cells.back().left = word->left;
+                    cells.back().text = word->text;
+                } else {
+                    cells.back().text += L' ' + word->text;
+                }
+                cells.back().right = word->right;
+                ++word_index;
+            }
+        }
+    }
+    return cells;
+}
+
+// Колонки сетки, которые пересекают эту строку по реальному зазору между
+// словами: тогда строка — это строка таблицы, а не предложение.
+std::vector<int> line_columns_with_gaps(
+    const std::vector<const WordInfo*>& line_words,
+    const std::vector<int>& forced_columns,
+    int min_gap) {
+    std::vector<int> result;
+    if (forced_columns.empty() || line_words.size() < 2) {
+        return result;
+    }
+    // Допуск: колонка таблицы и зазор конкретной строки могут немного не
+    // совпадать по x.
+    const int tolerance = 15;
+    for (const int column : forced_columns) {
+        for (std::size_t i = 1; i < line_words.size(); ++i) {
+            const int gap_start = line_words[i - 1]->right;
+            const int gap_end = line_words[i]->left;
+            if (gap_end - gap_start < min_gap) {
+                continue;
+            }
+            if (column >= gap_start - tolerance &&
+                column <= gap_end + tolerance) {
+                // Границей берём середину зазора именно этой строки.
+                result.push_back((gap_start + gap_end) / 2);
+                break;
+            }
+        }
+    }
+    return result;
 }
 
 }  // анонимное пространство имён
@@ -205,11 +283,10 @@ LayoutPage build_layout_page(
             }
         }
         std::vector<int> columns;
-        // Таблица: зазоры есть у многих строк и образуют вертикальные полосы.
-        const bool table_like = ordered_lines.size() >= 2 &&
-            lines_with_gap * 2 >=
-                static_cast<int>(ordered_lines.size());
-        if (table_like && !intervals.empty()) {
+        // Зазоры, повторяющиеся от строки к строке, — границы колонок.
+        // Таблица не всегда распознаётся как единый блок, поэтому колонки
+        // вычисляем всегда, а применяем к строке только там, где зазор есть.
+        if (!intervals.empty()) {
             int min_x = intervals.front().start;
             int max_x = intervals.front().end;
             for (const auto& interval : intervals) {
@@ -229,7 +306,7 @@ LayoutPage build_layout_page(
                 }
                 const int threshold = std::max(
                     2,
-                    static_cast<int>(ordered_lines.size()) / 3);
+                    lines_with_gap / 2);
                 std::size_t index = 0;
                 while (index < coverage.size()) {
                     if (coverage[index] >= threshold) {
@@ -248,7 +325,7 @@ LayoutPage build_layout_page(
             }
         }
         // Если по зазорам колонки не нашлись, берём линии сетки с картинки.
-        if (table_like && columns.empty() && !forced_columns.empty()) {
+        if (columns.empty() && !forced_columns.empty()) {
             for (const int column : forced_columns) {
                 if (column > words_min_left && column < words_max_right) {
                     columns.push_back(column);
@@ -274,47 +351,119 @@ LayoutPage build_layout_page(
             }
             line.font_height = std::max(median(line_heights), 1);
 
-            if (!block.table) {
-                line.cells.push_back(make_line_cell(line_words, font_height));
+            // Колонки применяем к строке только при реальном зазоре между
+            // словами — тогда значение остаётся в своей колонке, как в
+            // оригинале, а предложение абзаца не разваливается.
+            std::vector<int> active_columns =
+                line_columns_with_gaps(line_words, columns, min_gap);
+            if (active_columns.empty()) {
+                active_columns = line_columns_with_gaps(
+                    line_words, forced_columns, min_gap);
+            }
+            if (!active_columns.empty()) {
+                line.cells =
+                    split_line_by_columns(line_words, active_columns, font_height);
             } else {
-                std::size_t word_index = 0;
-                int column = 0;
-                while (word_index < line_words.size()) {
-                    std::vector<const WordInfo*> cell_words;
-                    const int boundary =
-                        column < static_cast<int>(columns.size())
-                            ? columns[static_cast<std::size_t>(column)]
-                            : 0;
-                    while (word_index < line_words.size()) {
-                        if (column < static_cast<int>(columns.size()) &&
-                            line_words[word_index]->left > boundary) {
-                            break;
-                        }
-                        cell_words.push_back(line_words[word_index]);
-                        ++word_index;
-                    }
-                    line.cells.push_back(
-                        make_line_cell(cell_words, font_height));
-                    ++column;
-                    if (column > static_cast<int>(columns.size())) {
-                        // Последняя колонка: добираем остаток слов.
-                        while (word_index < line_words.size()) {
-                            const WordInfo* word = line_words[word_index];
-                            if (line.cells.back().text.empty()) {
-                                line.cells.back().left = word->left;
-                                line.cells.back().text = word->text;
-                            } else {
-                                line.cells.back().text +=
-                                    L' ' + word->text;
-                            }
-                            line.cells.back().right = word->right;
-                            ++word_index;
-                        }
-                    }
-                }
+                line.cells.push_back(make_line_cell(line_words, font_height));
             }
             block.lines.push_back(std::move(line));
         }
+
+        // Склеиваем строки абзаца в один блок: перевод тогда цельный (как в
+        // оригинале), а не разбитый по строкам. Строки таблицы (несколько
+        // ячеек) и новые пункты списка не склеиваем.
+        std::vector<LayoutLine> merged;
+        for (auto& line : block.lines) {
+            const bool body = line.cells.size() == 1 &&
+                !line.cells[0].text.empty();
+            if (body && !merged.empty()) {
+                LayoutLine& previous = merged.back();
+                const bool previous_body = previous.cells.size() == 1 &&
+                    !previous.cells[0].text.empty();
+                const std::wstring& text = line.cells[0].text;
+                const wchar_t first = text.empty() ? L'\0' : text.front();
+                const bool starts_item = first == L'•' || first == L'-' ||
+                    first == L'·' || first == L'*';
+                // Склеиваем только если предыдущая строка оборвана на полуслове
+                // (нет завершающей точки) — иначе это новый пункт/предложение.
+                const std::wstring& prior = previous.cells[0].text;
+                std::size_t last = prior.size();
+                while (last > 0 && (prior[last - 1] == L' ' ||
+                                    prior[last - 1] == L'\t')) {
+                    --last;
+                }
+                const wchar_t prior_last = last > 0 ? prior[last - 1] : L'\0';
+                const bool sentence_end = prior_last == L'.' ||
+                    prior_last == L'!' || prior_last == L'?' ||
+                    prior_last == L':' || prior_last == L';';
+                const int font = std::max(previous.font_height, 1);
+                const int gap = line.top - previous.bottom;
+                // Продолжение абзаца/пункта может быть сдвинуто вправо
+                // («висячий» отступ после маркера — до нескольких кеглей).
+                const bool same_indent = line.left <= previous.left + font * 6;
+                const bool same_size =
+                    std::abs(previous.font_height - line.font_height) <=
+                    std::max(6, font / 2);
+                if (previous_body && !starts_item && !sentence_end &&
+                    same_indent && same_size && gap <= font) {
+                    previous.cells[0].text += L' ';
+                    previous.cells[0].text += text;
+                    previous.cells[0].left = std::min(
+                        previous.cells[0].left, line.cells[0].left);
+                    previous.cells[0].right = std::max(
+                        previous.cells[0].right, line.cells[0].right);
+                    previous.left = std::min(previous.left, line.left);
+                    previous.right = std::max(previous.right, line.right);
+                    previous.top = std::min(previous.top, line.top);
+                    previous.bottom = std::max(previous.bottom, line.bottom);
+                    previous.font_height = std::max(
+                        previous.font_height, line.font_height);
+                    continue;
+                }
+            }
+            merged.push_back(std::move(line));
+        }
+        block.lines.swap(merged);
+
+        // Заголовки: строка обособлена пустой областью (зазор после) и при
+        // этом широкая или стоит по центру страницы. Размер не используем —
+        // у буллетов OCR часто даёт завышенный кегль.
+        {
+            std::vector<int> heights;
+            for (const auto& line : block.lines) {
+                heights.push_back(line.font_height);
+            }
+            const int median_height = median(heights);
+            const int span = words_max_right - words_min_left;
+            const int block_center = (words_min_left + words_max_right) / 2;
+            for (std::size_t line_index = 0;
+                 line_index < block.lines.size();
+                 ++line_index) {
+                const auto& line = block.lines[line_index];
+                const int gap = line_index + 1 < block.lines.size()
+                    ? block.lines[line_index + 1].top - line.bottom
+                    : 0;
+                const int line_center = (line.left + line.right) / 2;
+                const bool centered =
+                    span > 0 &&
+                    std::abs(line_center - block_center) < span / 10;
+                if (line.cells.size() == 1 &&
+                    // Одна физическая строка (не склеенный абзац).
+                    line.bottom - line.top <= line.font_height * 3 / 2 &&
+                    gap >= line.font_height * 3 / 2 &&
+                    ((line.right - line.left) >= span / 3 || centered)) {
+                    for (auto& cell : block.lines[line_index].cells) {
+                        cell.bold = true;
+                    }
+                    // У стилизованных надписей OCR даёт тонкий бокс — не
+                    // рисуем заголовок мельче основного текста.
+                    block.lines[line_index].font_height = std::max(
+                        line.font_height,
+                        median_height * 3 / 2);
+                }
+            }
+        }
+
         block.left = block.lines.front().left;
         block.top = block.lines.front().top;
         block.right = block.lines.front().right;
@@ -384,7 +533,7 @@ std::vector<int> detect_vertical_grid_lines(
             const std::uint8_t* pixel =
                 row + static_cast<std::size_t>(x) * 4;
             const int sum = pixel[0] + pixel[1] + pixel[2];
-            if (sum < 420) {
+            if (sum < 600) {
                 ++dark[static_cast<std::size_t>(x)];
             }
         }

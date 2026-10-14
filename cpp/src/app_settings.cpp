@@ -268,6 +268,8 @@ AppSettings load_settings(const std::filesystem::path& path) {
             read_int(data, "image_float_button_x", -1);
         settings.image_float_button_y =
             read_int(data, "image_float_button_y", -1);
+        settings.ocr_engine = normalize_ocr_engine(
+            read_string(data, "ocr_engine", "auto"));
         // Жест «двойное Ctrl+C» работает через общий Ctrl+C+C: включаем его.
         if (settings.excel_trigger == kExcelTriggerDoubleCtrlC) {
             settings.double_ctrl_c_translation = true;
@@ -334,6 +336,7 @@ void save_settings(
     data["image_float_button"] = settings.image_float_button;
     data["image_float_button_x"] = settings.image_float_button_x;
     data["image_float_button_y"] = settings.image_float_button_y;
+    data["ocr_engine"] = normalize_ocr_engine(settings.ocr_engine);
     fs_utils::write_text_file(path, data.dump(2) + "\n");
 }
 
@@ -382,6 +385,16 @@ std::string normalize_excel_trigger(std::string_view trigger) {
         return std::string{kExcelTriggerDoubleCtrlC};
     }
     return std::string{kExcelTriggerHotkey};
+}
+
+std::string normalize_ocr_engine(std::string_view engine) {
+    if (engine == kOcrEngineTesseract) {
+        return std::string{kOcrEngineTesseract};
+    }
+    if (engine == kOcrEnginePaddle) {
+        return std::string{kOcrEnginePaddle};
+    }
+    return std::string{kOcrEngineAuto};
 }
 
 std::string settings_engine_name(EngineKind engine_kind) {

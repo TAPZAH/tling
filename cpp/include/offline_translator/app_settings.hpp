@@ -58,6 +58,8 @@ struct AppSettings {
     bool image_float_button{false};
     int image_float_button_x{-1};
     int image_float_button_y{-1};
+    // auto | tesseract | paddle — движок распознавания текста (OCR).
+    std::string ocr_engine{"auto"};
 };
 
 inline constexpr std::string_view kUiThemeLight = "light";
@@ -69,6 +71,9 @@ inline constexpr std::string_view kExcelWriteCom = "com";
 inline constexpr std::string_view kExcelWriteAuto = "auto";
 inline constexpr std::string_view kExcelTriggerHotkey = "hotkey";
 inline constexpr std::string_view kExcelTriggerDoubleCtrlC = "double_ctrl_c";
+inline constexpr std::string_view kOcrEngineAuto = "auto";
+inline constexpr std::string_view kOcrEngineTesseract = "tesseract";
+inline constexpr std::string_view kOcrEnginePaddle = "paddle";
 
 std::filesystem::path default_data_root();
 std::filesystem::path default_settings_path();
@@ -84,5 +89,6 @@ std::string normalize_ui_theme(std::string_view theme);
 std::string normalize_append_separator(std::string_view separator);
 std::string normalize_excel_write_method(std::string_view method);
 std::string normalize_excel_trigger(std::string_view trigger);
+std::string normalize_ocr_engine(std::string_view engine);
 
 }  // пространство имён offline_translator

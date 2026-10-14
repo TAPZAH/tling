@@ -26,6 +26,39 @@ else()
     message(FATAL_ERROR "Не найден целевой объект Tesseract из find_package")
 endif()
 
+# OCR на PaddleOCR (PP-OCR) через ONNX Runtime: качество детекции строк на
+# фото/сканах. Модели — в третьей стороне (vendor), можно и рядом с exe.
+option(OT_PADDLE_OCR "Подключить OCR на PaddleOCR (ONNX Runtime)" ${WIN32})
+if (OT_PADDLE_OCR)
+    set(OT_ORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime")
+    if (NOT EXISTS "${OT_ORT_ROOT}/include/onnxruntime_c_api.h")
+        message(FATAL_ERROR
+            "Не найден ONNX Runtime в ${OT_ORT_ROOT} (нужен include/ и lib/)")
+    endif()
+    add_library(onnxruntime_imported SHARED IMPORTED GLOBAL)
+    set_target_properties(onnxruntime_imported PROPERTIES
+        IMPORTED_IMPLIB "${OT_ORT_ROOT}/lib/onnxruntime.lib"
+        IMPORTED_LOCATION "${OT_ORT_ROOT}/lib/onnxruntime.dll"
+        INTERFACE_INCLUDE_DIRECTORIES "${OT_ORT_ROOT}/include"
+    )
+endif()
+
+# Копирует onnxruntime.dll рядом с целью.
+function(offline_translator_deploy_paddle_runtime target_name)
+    if (NOT OT_PADDLE_OCR)
+        return()
+    endif()
+    if (NOT TARGET "${target_name}")
+        return()
+    endif()
+    add_custom_command(TARGET "${target_name}" POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${OT_ORT_ROOT}/lib/onnxruntime.dll"
+            "$<TARGET_FILE_DIR:${target_name}>/onnxruntime.dll"
+        COMMENT "Копирование onnxruntime.dll рядом с ${target_name}"
+    )
+endfunction()
+
 # Копирует runtime DLL Tesseract и всех его общих зависимостей рядом с целью.
 function(offline_translator_deploy_ocr_runtime target_name)
     if (NOT WIN32)
@@ -151,6 +184,12 @@ target_link_libraries(offline_translator_core
     PUBLIC nlohmann_json::nlohmann_json
     PRIVATE ZLIB::ZLIB zstd::libzstd ${OT_TESSERACT_TARGET}
 )
+
+if (OT_PADDLE_OCR)
+    target_sources(offline_translator_core PRIVATE src/paddle_ocr.cpp)
+    target_link_libraries(offline_translator_core PRIVATE onnxruntime_imported)
+    target_compile_definitions(offline_translator_core PUBLIC OT_PADDLE_OCR=1)
+endif()
 # DLL РґР»СЏ РґРµРїР»РѕСЏ: zlib РёР· РёРјРїРѕСЂС‚РЅРѕР№ С†РµР»Рё, zstd вЂ” РёРЅС‚РµСЂС„РµР№СЃРЅР°СЏ, РёС‰РµРј С„Р°Р№Р»РѕРј.
 set(_manifest_bin "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")
 get_target_property(_zlib_dll ZLIB::ZLIB IMPORTED_LOCATION_RELEASE)
@@ -309,6 +348,7 @@ if (ENABLE_CTRANSLATE2)
                 oleaut32
         )
         offline_translator_deploy_ocr_runtime(TLing)
+        offline_translator_deploy_paddle_runtime(TLing)
         # PDFium: prebuilt DLL из third_party, линкуем и кладём рядом с exe.
         target_link_libraries(TLing PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdfium/lib/pdfium.dll.lib"
@@ -477,6 +517,8 @@ target_include_directories(core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 offline_translator_deploy_ocr_runtime(core_tests)
 offline_translator_deploy_ocr_runtime(integration_tests)
+offline_translator_deploy_paddle_runtime(core_tests)
+offline_translator_deploy_paddle_runtime(integration_tests)
 # Тесты определения языка используют Rust-мост, поэтому fxbridge.dll нужен
 # и рядом с core_tests.
 if (WIN32 AND EXISTS "${_fxbridge_dll}")
@@ -540,6 +582,7 @@ if (WIN32)
             gdiplus
     )
     offline_translator_deploy_ocr_runtime(image_layout_tests)
+    offline_translator_deploy_paddle_runtime(image_layout_tests)
     if (MSVC)
         target_compile_options(image_layout_tests PRIVATE /EHsc /permissive- /utf-8)
     endif()
@@ -572,6 +615,28 @@ if (WIN32)
         target_compile_options(pdf_tests PRIVATE /EHsc /permissive- /utf-8)
     endif()
     add_test(NAME pdf_tests COMMAND pdf_tests)
+endif()
+
+if (OT_PADDLE_OCR AND WIN32)
+    add_executable(paddle_ocr_smoke
+        tools/paddle_ocr_smoke.cpp
+        app/image_file.cpp
+    )
+    target_include_directories(paddle_ocr_smoke
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/app
+    )
+    target_link_libraries(paddle_ocr_smoke
+        PRIVATE
+            offline_translator_core
+            gdiplus
+    )
+    offline_translator_deploy_ocr_runtime(paddle_ocr_smoke)
+    offline_translator_deploy_paddle_runtime(paddle_ocr_smoke)
+    if (MSVC)
+        target_compile_options(paddle_ocr_smoke PRIVATE /EHsc /permissive- /utf-8)
+    endif()
 endif()
 
 if (ENABLE_CTRANSLATE2 AND WIN32)

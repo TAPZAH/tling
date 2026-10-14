@@ -2,6 +2,12 @@
 
 #include "offline_translator/selection.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <cwctype>
+#include <string_view>
+#include <vector>
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -193,6 +199,38 @@ bool excel_cell_translatable(std::wstring_view cell) {
     }
     if (trimmed.empty()) {
         return false;
+    }
+    // Суммы с кодом валюты («35.000,00 TL», «3.750,00 €») не переводим —
+    // как в Google: числа и валюта остаются как есть.
+    {
+        bool has_digit = false;
+        std::wstring letters;
+        for (const wchar_t symbol : trimmed) {
+            if (symbol >= L'0' && symbol <= L'9') {
+                has_digit = true;
+            } else if ((symbol >= L'A' && symbol <= L'Z') ||
+                       (symbol >= L'a' && symbol <= L'z')) {
+                letters.push_back(symbol);
+            }
+        }
+        if (has_digit && !letters.empty() && letters.size() <= 4) {
+            std::wstring code;
+            for (const wchar_t symbol : letters) {
+                code.push_back(static_cast<wchar_t>(towupper(symbol)));
+            }
+            static const std::vector<std::string_view> currencies = {
+                "TL", "USD", "EUR", "RUB", "TRY", "GBP", "KZT", "UAH",
+                "AZN", "PLN", "RON", "CHF", "AED"};
+            for (const auto currency : currencies) {
+                if (code.size() == currency.size() &&
+                    std::equal(
+                        code.begin(),
+                        code.end(),
+                        currency.begin())) {
+                    return false;
+                }
+            }
+        }
     }
     return !detect_script_language(narrow_utf8(trimmed)).empty();
 }

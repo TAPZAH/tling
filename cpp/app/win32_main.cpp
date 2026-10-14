@@ -17,6 +17,7 @@
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/language_detect.hpp"
 #include "offline_translator/ocr_engine.hpp"
+#include "offline_translator/paddle_ocr.hpp"
 #include "offline_translator/route_planner.hpp"
 #include "offline_translator/selection.hpp"
 #include "offline_translator/translation_application.hpp"
@@ -132,6 +133,7 @@ constexpr int kSettingsExcelEnabled = 1232;
 constexpr int kSettingsExcelHotkey = 1233;
 constexpr int kSettingsExcelMethod = 1234;
 constexpr int kSettingsExcelTrigger = 1235;
+constexpr int kSettingsOcrEngine = 1236;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
@@ -217,6 +219,7 @@ HWND g_settings_excel_enabled = nullptr;
 HWND g_settings_excel_hotkey = nullptr;
 HWND g_settings_excel_method = nullptr;
 HWND g_settings_excel_trigger = nullptr;
+HWND g_settings_ocr_engine = nullptr;
 std::wstring g_hotkey_capture_backup;
 std::atomic<bool> g_update_busy{false};
 std::optional<offline_translator::UpdateInfo> g_pending_update;
@@ -839,6 +842,69 @@ void fill_append_separator_combo(HWND combo, std::string_view selected) {
 
 bool key_down(int virtual_key) {
     return (GetAsyncKeyState(virtual_key) & 0x8000) != 0;
+}
+
+int ocr_engine_combo_index(std::string_view engine) {
+    if (engine == offline_translator::kOcrEngineTesseract) {
+        return 1;
+    }
+    if (engine == offline_translator::kOcrEnginePaddle) {
+        return 2;
+    }
+    return 0;
+}
+
+std::string ocr_engine_from_combo(HWND combo) {
+    const LRESULT index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (index == 1) {
+        return std::string{offline_translator::kOcrEngineTesseract};
+    }
+    if (index == 2) {
+        return std::string{offline_translator::kOcrEnginePaddle};
+    }
+    return std::string{offline_translator::kOcrEngineAuto};
+}
+
+void fill_ocr_engine_combo(HWND combo, std::string_view selected) {
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Автоматически (лучший доступный)"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Tesseract"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"PaddleOCR (PP-OCR)"));
+    SendMessageW(combo, CB_SETCURSEL, ocr_engine_combo_index(selected), 0);
+}
+
+void apply_ocr_backend_from_settings(
+    const offline_translator::AppSettings& settings) {
+    const std::filesystem::path ppocr_root =
+        offline_translator::default_ppocr_root();
+    offline_translator::OcrBackend backend =
+        offline_translator::OcrBackend::Tesseract;
+    if (settings.ocr_engine == offline_translator::kOcrEnginePaddle) {
+        backend = offline_translator::OcrBackend::Paddle;
+    } else if (
+        settings.ocr_engine == offline_translator::kOcrEngineAuto &&
+        offline_translator::ppocr_installed(ppocr_root)) {
+        backend = offline_translator::OcrBackend::Paddle;
+    }
+    offline_translator::set_ocr_backend(backend, ppocr_root);
+    offline_translator::app_log_info(
+        std::string("OCR backend: ") +
+        (backend == offline_translator::OcrBackend::Paddle ? "paddle"
+                                                           : "tesseract") +
+        " mode=" + settings.ocr_engine +
+        " root=" + ppocr_root.string());
 }
 
 std::size_t language_count() {
@@ -3659,6 +3725,9 @@ std::vector<std::string> current_ocr_languages() {
         }
     } catch (const std::exception&) {
     }
+    if (offline_translator::ocr_paddle_ready()) {
+        return {"en", "ru"};
+    }
     const auto root = offline_translator::default_tessdata_root();
     std::vector<std::string> codes;
     for (const char* code : {"en", "ru"}) {
@@ -3676,6 +3745,18 @@ std::vector<std::string> current_ocr_languages() {
 bool ensure_ocr_languages(
     HWND window,
     const std::vector<std::string>& ocr_languages) {
+    if (offline_translator::ocr_paddle_ready()) {
+        bool all_supported = !ocr_languages.empty();
+        for (const auto& code : ocr_languages) {
+            if (offline_translator::ppocr_script_for_language(code).empty()) {
+                all_supported = false;
+                break;
+            }
+        }
+        if (all_supported) {
+            return true;
+        }
+    }
     for (const auto& code : ocr_languages) {
         if (!offline_translator::tesseract_language_supported(code)) {
             const std::wstring message =
@@ -6569,6 +6650,9 @@ void apply_settings_dialog(HWND settings_window) {
         settings.excel_write_method =
             excel_method_from_combo(g_settings_excel_method);
     }
+    if (g_settings_ocr_engine) {
+        settings.ocr_engine = ocr_engine_from_combo(g_settings_ocr_engine);
+    }
     settings.ui_theme =
         g_settings_theme_dark &&
         SendMessageW(g_settings_theme_dark, BM_GETCHECK, 0, 0) == BST_CHECKED
@@ -6629,6 +6713,7 @@ void apply_settings_dialog(HWND settings_window) {
             }
         }
         store_runtime_settings(settings);
+        apply_ocr_backend_from_settings(settings);
         refresh_tray_icon();
         apply_live_theme();
         offline_translator::app_log_info(
@@ -6680,6 +6765,7 @@ void close_settings_window() {
     g_settings_excel_hotkey = nullptr;
     g_settings_excel_method = nullptr;
     g_settings_excel_trigger = nullptr;
+    g_settings_ocr_engine = nullptr;
     g_settings_check_update = nullptr;
     g_settings_install_update = nullptr;
     g_settings_open_releases = nullptr;
@@ -7312,6 +7398,35 @@ LRESULT CALLBACK settings_proc_impl(
             0,
             16,
             930,
+            470,
+            54);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"Движок распознавания текста (OCR):",
+            0,
+            16,
+            996,
+            300,
+            18);
+        g_settings_ocr_engine = content(
+            kSettingsPageBehavior,
+            L"COMBOBOX",
+            nullptr,
+            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+            16,
+            1018,
+            260,
+            160,
+            kSettingsOcrEngine);
+        fill_ocr_engine_combo(g_settings_ocr_engine, settings.ocr_engine);
+        content(
+            kSettingsPageBehavior,
+            L"STATIC",
+            L"«Автоматически»: PaddleOCR (точнее на фото и сканах), иначе Tesseract. PaddleOCR работает при наличии моделей PP-OCR.",
+            0,
+            16,
+            1050,
             470,
             54);
         // ===== Страница «Темы» =====
@@ -9619,6 +9734,7 @@ int WINAPI wWinMain(
 
     const auto settings = offline_translator::load_settings();
     offline_translator::set_ui_language(settings.ui_language);
+    apply_ocr_backend_from_settings(settings);
     offline_translator::app_log_info(
         "настройки: engine=" + settings.engine +
         " lang=" + settings.ui_language +

@@ -75,8 +75,13 @@ function Copy-VcRedistDlls {
     $required = @(
         "vcruntime140.dll",
         "vcruntime140_1.dll",
+        "vcruntime140_threads.dll",
         "msvcp140.dll",
+        "msvcp140_1.dll",
+        "msvcp140_2.dll",
         "msvcp140_atomic_wait.dll",
+        "msvcp140_codecvt_ids.dll",
+        "concrt140.dll",
         "vcomp140.dll"
     )
     $redistRoot = Find-VcRedistRoot
@@ -167,6 +172,20 @@ function Copy-LicenseFiles {
             -Recurse -Force
     }
 
+    # ONNX Runtime (MIT) и модели PP-OCR (Apache-2.0).
+    $ortLicenses = Join-Path $PSScriptRoot "third_party\onnxruntime\licenses"
+    if (Test-Path -LiteralPath $ortLicenses -PathType Container) {
+        Copy-Item -LiteralPath $ortLicenses `
+            -Destination (Join-Path $TargetDirectory "onnxruntime") `
+            -Recurse -Force
+    }
+    $ppocrLicense = Join-Path $PSScriptRoot "third_party\ppocr\LICENSE.txt"
+    if (Test-Path -LiteralPath $ppocrLicense -PathType Leaf) {
+        Copy-Item -LiteralPath $ppocrLicense `
+            -Destination (Join-Path $TargetDirectory "LICENSE-PaddleOCR.txt") `
+            -Force
+    }
+
     $ct2Candidates = @(
         (Join-Path $CTranslate2Dir "..\..\LICENSE"),
         "C:\deps\CTranslate2\LICENSE"
@@ -222,9 +241,9 @@ function Write-PortableReadme {
     $template = Join-Path $PSScriptRoot "packaging\README.portable.txt"
     $text = [System.IO.File]::ReadAllText($template, [System.Text.Encoding]::UTF8)
     if ($WithModels) {
-        $extra = "В папке data могут лежать модели Argos (argos-packages) и NLLB-200 (nllb-200)."
+        $extra = "В папке data лежат модели Argos (argos-packages), NLLB-200 (nllb-200) и модели OCR PaddleOCR (ppocr)."
     } else {
-        $extra = "Языковые модели в эту сборку не входят. Скачайте их в окне Пакеты (нужен интернет) либо соберите с -IncludeModels."
+        $extra = "Модели перевода в эту сборку не входят: скачайте их в окне Пакеты (нужен интернет) либо соберите с -IncludeModels. Модели OCR PaddleOCR (ppocr) уже включены."
     }
     $text = $text.Replace("{{MODELS}}", $extra)
     $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -323,6 +342,16 @@ try {
 
     $dataDir = Join-Path $OutputDir "data"
     Write-DataPlaceholder -DataDir $dataDir -MigrateSettings:$MigrateSettings
+
+    # Модели PaddleOCR (PP-OCR): OCR фотографий и сканов. Небольшие (~27 МБ),
+    # идут в комплекте, чтобы распознавание работало без скачивания.
+    $ppocrSource = Join-Path $PSScriptRoot "third_party\ppocr"
+    if (Test-Path -LiteralPath $ppocrSource -PathType Container) {
+        Copy-TreeExcluding $ppocrSource (Join-Path $dataDir "ppocr") @()
+        Write-Output "Скопированы модели PP-OCR"
+    } else {
+        Write-Warning "Нет моделей PP-OCR: $ppocrSource"
+    }
 
     if ($IncludeModels) {
         $argosSource = Join-Path $HOME ".local\share\argos-translate\packages"

@@ -1,0 +1,22 @@
+Модели PaddleOCR (PP-OCR) для TLing
+==================================
+
+Файлы в этом каталоге — предобученные модели PaddleOCR (PP-OCRv4 детектор,
+PP-OCRv5 мобильные распознаватели latin/eslav, PP-LCNet ориентации документа
+и текстовой строки), сконвертированные в формат ONNX.
+
+Источник: https://github.com/PaddlePaddle/PaddleOCR
+Лицензия: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+ONNX-сборки: monkt/paddleocr-onnx и SWHL/RapidOCR (Hugging Face).
+
+Файлы:
+  det.onnx          — детектор текстовых регионов (DBNet, PP-OCRv4 mobile)
+  rec_latin.onnx    — распознаватель латиницы (PP-OCRv5 mobile)
+  dict_latin.txt    — словарь латиницы
+  rec_eslav.onnx    — распознаватель кириллицы (восточнославянские, PP-OCRv5 mobile)
+  dict_eslav.txt    — словарь кириллицы
+  doc_ori.onnx      — ориентация страницы 0/90/180/270 (PP-LCNet)
+  textline_ori.onnx — ориентация текстовой строки 0/180 (PP-LCNet)
+
+Инференс выполняется библиотекой ONNX Runtime (лицензия MIT), см.
+licenses/onnxruntime/ рядом с пакетом.

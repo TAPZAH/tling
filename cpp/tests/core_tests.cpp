@@ -17,6 +17,7 @@
 #include "offline_translator/nllb_language.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/ocr_engine.hpp"
+#include "offline_translator/paddle_ocr.hpp"
 #include "offline_translator/online_engine.hpp"
 #include "offline_translator/selection.hpp"
 #include "offline_translator/text_split.hpp"
@@ -1701,9 +1702,42 @@ int main() {
             !plain_page.blocks[0].table,
             "layout: обычный абзац без таблицы");
         require(
-            plain_page.blocks[0].lines[1].cells[0].text ==
-                L"Hello world",
-            "layout: строка обычного абзаца цела");
+            plain_page.blocks[0].lines.size() == 1,
+            "layout: строки одного абзаца склеены");
+        require(
+            plain_page.blocks[0].lines[0].cells[0].text ==
+                L"Hello world Hello world",
+            "layout: текст абзаца цел");
+
+        // Регресс: узкий бокс с тем же left, что и широкий (артефакт
+        // детектора), не должен обрезать ширину ячейки строки.
+        OcrLayout overlapping;
+        overlapping.width = 1000;
+        overlapping.height = 200;
+        {
+            OcrWordBox wide;
+            wide.text = "Serbest Depo bedellerimiz";
+            wide.left = 0;
+            wide.top = 40;
+            wide.width = 900;
+            wide.height = 20;
+            wide.line = 0;
+            wide.confidence = 90;
+            overlapping.words.push_back(wide);
+            OcrWordBox narrow;
+            narrow.text = "x";
+            narrow.left = 0;
+            narrow.top = 40;
+            narrow.width = 40;
+            narrow.height = 20;
+            narrow.line = 0;
+            narrow.confidence = 40;
+            overlapping.words.push_back(narrow);
+        }
+        const auto overlapping_page = build_layout_page(overlapping);
+        require(
+            overlapping_page.blocks[0].lines[0].cells[0].right >= 899,
+            "layout: ширина строки не обрезается узким боксом");
 
         const auto export_dir =
             std::filesystem::temp_directory_path() /
@@ -2227,6 +2261,110 @@ int main() {
         }
 #endif
     }
+
+    // Скрипт PP-OCR по языку и нормализация настройки движка OCR.
+    require(
+        ppocr_script_for_language("ru") == "eslav",
+        "PP-OCR: ru -> eslav");
+    require(
+        ppocr_script_for_language("uk") == "eslav",
+        "PP-OCR: uk -> eslav");
+    require(
+        ppocr_script_for_language("tr") == "latin",
+        "PP-OCR: tr -> latin");
+    require(
+        ppocr_script_for_language("zh").empty(),
+        "PP-OCR: нет распознавателя для zh");
+    require(
+        normalize_ocr_engine("paddle") == kOcrEnginePaddle,
+        "OCR: настройка paddle нормализуется");
+    require(
+        normalize_ocr_engine("tesseract") == kOcrEngineTesseract,
+        "OCR: настройка tesseract нормализуется");
+    require(
+        normalize_ocr_engine("что-то") == kOcrEngineAuto,
+        "OCR: неизвестная настройка -> auto");
+    {
+        const auto empty_ppocr =
+            std::filesystem::temp_directory_path() / "offline-translator-ppocr";
+        std::filesystem::remove_all(empty_ppocr);
+        require(
+            !ppocr_installed(empty_ppocr),
+            "PP-OCR: пустой каталог не считается установленным");
+    }
+
+#ifdef _WIN32
+    // PaddleOCR (PP-OCR) на синтетической картинке — только при наличии
+    // моделей, чтобы ctest не зависел от их установки.
+    if (std::getenv("TLING_OCR_TEST") != nullptr) {
+        const auto ppocr_root = default_ppocr_root();
+        if (!ppocr_installed(ppocr_root)) {
+            std::cout << "PP-OCR тест пропущен: нет моделей в "
+                      << ppocr_root.string() << "\n";
+        } else {
+            constexpr int kWidth = 640;
+            constexpr int kHeight = 160;
+            HDC screen = ::GetDC(nullptr);
+            HDC memory_dc = ::CreateCompatibleDC(screen);
+            BITMAPINFO info{};
+            info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            info.bmiHeader.biWidth = kWidth;
+            info.bmiHeader.biHeight = -kHeight;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            void* bits = nullptr;
+            HBITMAP bitmap = ::CreateDIBSection(
+                memory_dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+            HGDIOBJ old_bitmap = ::SelectObject(memory_dc, bitmap);
+            RECT area{0, 0, kWidth, kHeight};
+            HBRUSH white = ::CreateSolidBrush(RGB(255, 255, 255));
+            ::FillRect(memory_dc, &area, white);
+            ::DeleteObject(white);
+            ::SetBkMode(memory_dc, TRANSPARENT);
+            ::SetTextColor(memory_dc, RGB(0, 0, 0));
+            HFONT font = ::CreateFontW(
+                64, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
+            HGDIOBJ old_font = ::SelectObject(memory_dc, font);
+            const wchar_t* sample = L"HELLO WORLD";
+            ::TextOutW(
+                memory_dc,
+                20,
+                40,
+                sample,
+                static_cast<int>(lstrlenW(sample)));
+            ::GdiFlush();
+
+            PaddleOcrEngine paddle(ppocr_root);
+            paddle.initialize("en");
+            const auto layout = paddle.recognize_layout_oriented(
+                static_cast<const std::uint8_t*>(bits),
+                kWidth,
+                kHeight,
+                kWidth * 4,
+                4);
+            std::string joined;
+            for (const auto& word : layout.words) {
+                joined += word.text;
+                joined += ' ';
+            }
+            require(
+                joined.find("HELLO") != std::string::npos,
+                "PP-OCR: синтетическая картинка распознана");
+            std::cout << "PP-OCR: \"" << joined << "\" ("
+                      << layout.words.size() << " words)\n";
+
+            ::SelectObject(memory_dc, old_font);
+            ::DeleteObject(font);
+            ::SelectObject(memory_dc, old_bitmap);
+            ::DeleteObject(bitmap);
+            ::DeleteDC(memory_dc);
+            ::ReleaseDC(nullptr, screen);
+        }
+    }
+#endif
 
     const auto user_nllb = NllbModelManager::default_models_root();
     NllbModelManager real_nllb(user_nllb);
