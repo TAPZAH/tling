@@ -25,6 +25,8 @@
 #include "screen_ocr.hpp"
 #include "excel_com.hpp"
 #include "image_file.hpp"
+#include "image_render.hpp"
+#include "pdf_file.hpp"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -2753,13 +2755,6 @@ void show_tray_menu(HWND window) {
     if (!menu) {
         return;
     }
-    UINT autostart_flags = MF_OWNERDRAW;
-    try {
-        if (offline_translator::is_app_autostart_enabled()) {
-            autostart_flags |= MF_CHECKED;
-        }
-    } catch (const std::exception&) {
-    }
     AppendMenuW(
         menu,
         MF_OWNERDRAW,
@@ -2872,11 +2867,6 @@ void show_tray_menu(HWND window) {
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayTurbo)));
     AppendMenuW(
         menu,
-        autostart_flags,
-        kTrayAutostart,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayAutostart)));
-    AppendMenuW(
-        menu,
         MF_OWNERDRAW,
         kTrayCheckUpdate,
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayCheckUpdate)));
@@ -2927,19 +2917,6 @@ void show_tray_menu(HWND window) {
         window,
         nullptr);
     DestroyMenu(menu);
-}
-
-void toggle_app_autostart() {
-    try {
-        const bool enabled = !offline_translator::is_app_autostart_enabled();
-        offline_translator::set_app_autostart(enabled);
-        set_status(
-            enabled
-                ? L"Программа будет запускаться вместе с Windows"
-                : L"Программа убрана из автозагрузки");
-    } catch (const std::exception& error) {
-        set_status(from_utf8(error.what()));
-    }
 }
 
 bool is_over_our_popup(int x, int y) {
@@ -4176,9 +4153,15 @@ struct ExcelJobConfig {
     std::string api_key;
     std::string write_method;
     std::wstring separator;
-    // Только для перевода изображений: языки OCR и файл результата.
+    // Перевод изображений/PDF: языки OCR и файл результата.
     std::vector<std::string> ocr_languages;
     std::filesystem::path output_path;
+    // Источник: PDF/картинка на диске или готовый буфер (область экрана).
+    std::filesystem::path source_path;
+    std::vector<std::uint8_t> image;
+    int image_width{0};
+    int image_height{0};
+    bool output_png{false};
 };
 
 std::pair<std::string, std::string> excel_direction(
@@ -4186,6 +4169,11 @@ std::pair<std::string, std::string> excel_direction(
     const std::wstring& cell) {
     const std::string text = to_utf8(cell);
     if (!config.manual_source) {
+        // Онлайн Google сам определяет язык лучше нашему детектору — иначе
+        // турецкий/другие языки уходят как английские и не переводятся.
+        if (config.engine == offline_translator::EngineKind::google) {
+            return {"auto", config.target};
+        }
         const std::string source =
             detect_source_language(text, config.engine);
         std::string target = config.target;
@@ -4510,9 +4498,9 @@ std::optional<std::filesystem::path> choose_image_file(HWND owner) {
         filter.push_back(L'\0');
     };
     add_filter(
-        std::wstring(offline_translator::tr(L"Изображения")) +
-            L" (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff)",
-        L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff");
+        std::wstring(offline_translator::tr(L"Изображения и PDF")) +
+            L" (*.pdf;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff)",
+        L"*.pdf;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff");
     add_filter(L"*.*", L"*.*");
     filter.push_back(L'\0');
     wchar_t file[MAX_PATH]{};
@@ -4547,6 +4535,11 @@ std::optional<std::filesystem::path> choose_export_path(
     filter.push_back(L'\0');
     filter += L"*.xlsx";
     filter.push_back(L'\0');
+    filter += std::wstring(offline_translator::tr(L"Изображение с переводом")) +
+        L" (*.png)";
+    filter.push_back(L'\0');
+    filter += L"*.png";
+    filter.push_back(L'\0');
     filter.push_back(L'\0');
     const std::wstring suggested = stem + L".docx";
     const std::wstring directory_text = directory.wstring();
@@ -4572,104 +4565,357 @@ std::optional<std::filesystem::path> choose_export_path(
     }
     std::filesystem::path result(file);
     // Имя может содержать точки (дата), поэтому ориентируемся не на
-    // пустое расширение, а на то, docx/xlsx это или нет.
+    // пустое расширение, а на то, docx/xlsx/png это или нет.
     const std::wstring extension = result.extension().wstring();
     if (_wcsicmp(extension.c_str(), L".docx") != 0 &&
-        _wcsicmp(extension.c_str(), L".xlsx") != 0) {
-        result += options.nFilterIndex == 2 ? L".xlsx" : L".docx";
+        _wcsicmp(extension.c_str(), L".xlsx") != 0 &&
+        _wcsicmp(extension.c_str(), L".png") != 0) {
+        result += options.nFilterIndex == 2
+            ? L".xlsx"
+            : (options.nFilterIndex == 3 ? L".png" : L".docx");
     }
     return result;
 }
 
-void start_image_job(
-    HWND main_window,
-    ExcelJobConfig config,
-    std::vector<std::uint8_t> bgra,
+// Разметка страницы из растрового изображения через OCR: автоповорот и
+// границы колонок по линиям сетки. Если язык документа отличается от
+// загруженных языков OCR (например, турецкий), распознаём заново нужным
+// языком — иначе таблицы и короткие ячейки читаются мусором.
+offline_translator::LayoutPage ocr_raster_page(
+    offline_translator::OcrEngine& engine,
+    const ExcelJobConfig& config,
+    const std::vector<std::uint8_t>& bgra,
     int width,
     int height) {
+    const auto build = [&]() {
+        int rotation = 0;
+        const auto layout = offline_translator::recognize_best_orientation(
+            engine,
+            bgra.data(),
+            width,
+            height,
+            width * 4,
+            4,
+            &rotation);
+        int rotated_width = width;
+        int rotated_height = height;
+        std::vector<std::uint8_t> rotated;
+        if (rotation != 0) {
+            rotated = offline_translator::rotate_bgra_image(
+                bgra.data(),
+                width,
+                height,
+                width * 4,
+                rotation,
+                &rotated_width,
+                &rotated_height);
+        }
+        const std::uint8_t* grid_image =
+            rotation != 0 ? rotated.data() : bgra.data();
+        const auto grid_columns =
+            offline_translator::detect_vertical_grid_lines(
+                grid_image,
+                rotated_width,
+                rotated_height,
+                rotated_width * 4);
+        return offline_translator::build_layout_page(layout, grid_columns);
+    };
+
+    auto page = build();
+    if (config.manual_source) {
+        return page;
+    }
+    std::string sample;
+    for (const auto& block : page.blocks) {
+        for (const auto& line : block.lines) {
+            for (const auto& cell : line.cells) {
+                if (sample.size() >= 2000) {
+                    break;
+                }
+                sample += to_utf8(cell.text);
+                sample += '\n';
+            }
+        }
+    }
+    if (sample.empty()) {
+        return page;
+    }
+    const std::string detected =
+        detect_language_optional(sample, config.engine);
+    if (detected.empty() ||
+        std::find(
+            config.ocr_languages.begin(),
+            config.ocr_languages.end(),
+            detected) != config.ocr_languages.end() ||
+        !offline_translator::tesseract_language_supported(detected)) {
+        return page;
+    }
+    const auto tessdata_root = offline_translator::default_tessdata_root();
+    if (!offline_translator::tessdata_installed(detected, tessdata_root)) {
+        try {
+            offline_translator::app_log_info(
+                "документ: скачиваю OCR-данные " + detected);
+            offline_translator::download_tessdata(detected, {}, tessdata_root);
+        } catch (const std::exception&) {
+            return page;
+        }
+    }
+    try {
+        engine.initialize_multi({detected});
+        offline_translator::app_log_info(
+            "документ: повторное распознавание языком " + detected);
+        return build();
+    } catch (const std::exception&) {
+        return page;
+    }
+}
+
+bool process_document(
+    ExcelJobConfig config,
+    const std::shared_ptr<GuiRuntime>& runtime,
+    std::wstring* message_out) {
+    std::wstring message;
+    bool success = false;
+    try {
+            std::vector<offline_translator::LayoutPage> pages;
+            std::vector<std::vector<std::uint8_t>> page_images;
+            std::vector<int> image_widths;
+            std::vector<int> image_heights;
+            std::vector<std::size_t> page_text_counts;
+
+            const std::wstring source_extension =
+                config.source_path.extension().wstring();
+            const bool is_pdf =
+                _wcsicmp(source_extension.c_str(), L".pdf") == 0;
+
+            if (is_pdf) {
+                offline_translator::PdfDocument document(config.source_path);
+                if (!document.valid()) {
+                    message = L"Не удалось открыть PDF";
+                } else {
+                    std::unique_ptr<offline_translator::OcrEngine> ocr;
+                    const int count = document.page_count();
+                    for (int index = 0; index < count; ++index) {
+                        auto layer = document.extract_page_layer(index);
+                        offline_translator::LayoutPage page;
+                        std::vector<std::uint8_t> raster;
+                        int raster_width = 0;
+                        int raster_height = 0;
+                        if (layer.words.size() >= 3) {
+                            // Есть текстовый слой — точная разметка.
+                            page = offline_translator::build_layout_page(layer);
+                            if (config.output_png) {
+                                auto rendered =
+                                    document.render_page(index, 2.0f);
+                                if (rendered) {
+                                    raster = std::move(rendered->bgra);
+                                    raster_width = rendered->width;
+                                    raster_height = rendered->height;
+                                }
+                            }
+                        } else {
+                            // Скан: рендер + OCR.
+                            auto rendered = document.render_page(index, 2.0f);
+                            if (!rendered) {
+                                continue;
+                            }
+                            raster = std::move(rendered->bgra);
+                            raster_width = rendered->width;
+                            raster_height = rendered->height;
+                            if (!ocr) {
+                                ocr = std::make_unique<
+                                    offline_translator::OcrEngine>();
+                                ocr->initialize_multi(config.ocr_languages);
+                            }
+                            page = ocr_raster_page(
+                                *ocr,
+                                config,
+                                raster,
+                                raster_width,
+                                raster_height);
+                        }
+                        page_text_counts.push_back(
+                            offline_translator::layout_texts(page).size());
+                        pages.push_back(std::move(page));
+                        page_images.push_back(std::move(raster));
+                        image_widths.push_back(raster_width);
+                        image_heights.push_back(raster_height);
+                    }
+                }
+            } else {
+                std::vector<std::uint8_t> image;
+                int width = config.image_width;
+                int height = config.image_height;
+                if (!config.image.empty()) {
+                    image = std::move(config.image);
+                } else {
+                    auto loaded =
+                        offline_translator::load_image_file(config.source_path);
+                    if (loaded) {
+                        image = std::move(loaded->bgra);
+                        width = loaded->width;
+                        height = loaded->height;
+                    }
+                }
+                if (image.empty()) {
+                    message = L"Не удалось прочитать изображение";
+                } else {
+                    offline_translator::OcrEngine ocr;
+                    ocr.initialize_multi(config.ocr_languages);
+                    auto page = ocr_raster_page(ocr, config, image, width, height);
+                    page_text_counts.push_back(
+                        offline_translator::layout_texts(page).size());
+                    if (config.output_png) {
+                        page_images.push_back(image);
+                    } else {
+                        page_images.emplace_back();
+                    }
+                    image_widths.push_back(width);
+                    image_heights.push_back(height);
+                    pages.push_back(std::move(page));
+                }
+            }
+
+            if (pages.empty()) {
+                if (message.empty()) {
+                    message = L"Текст не найден";
+                }
+            } else {
+                // Язык документа определяем один раз по всему тексту:
+                // короткие ячейки таблиц при поячеечном автоопределении
+                // остаются без перевода.
+                if (!config.manual_source) {
+                    std::string sample;
+                    for (const auto& page : pages) {
+                        for (const auto& block : page.blocks) {
+                            for (const auto& line : block.lines) {
+                                for (const auto& cell : line.cells) {
+                                    if (sample.size() >= 4000) {
+                                        continue;
+                                    }
+                                    sample += to_utf8(cell.text);
+                                    sample += '\n';
+                                }
+                            }
+                        }
+                    }
+                    if (!sample.empty()) {
+                        const std::string detected =
+                            detect_language_optional(sample, config.engine);
+                        if (!detected.empty() && detected != config.target) {
+                            config.manual_source = true;
+                            config.source = detected;
+                            offline_translator::app_log_info(
+                                "документ: язык источника " + detected);
+                        }
+                    }
+                }
+                std::vector<std::wstring> texts;
+                for (const auto& page : pages) {
+                    for (auto& text : offline_translator::layout_texts(page)) {
+                        texts.push_back(std::move(text));
+                    }
+                }
+                if (texts.empty()) {
+                    message = L"Текст не найден";
+                } else {
+                    std::vector<std::wstring> translated;
+                    if (translate_text_batch(
+                            config,
+                            runtime,
+                            texts,
+                            &translated,
+                            &message)) {
+                        if (message_out != nullptr) {
+                            try {
+                                std::ofstream dump(
+                                    std::filesystem::path(
+                                        config.output_path.wstring() +
+                                        L".cells.txt"),
+                                    std::ios::binary);
+                                for (std::size_t index = 0;
+                                     index < texts.size() &&
+                                     index < translated.size();
+                                     ++index) {
+                                    dump << to_utf8(texts[index]) << "  =>  "
+                                         << to_utf8(translated[index])
+                                         << "\n";
+                                }
+                            } catch (const std::exception&) {
+                            }
+                        }
+                        std::size_t offset = 0;
+                        for (std::size_t index = 0; index < pages.size();
+                             ++index) {
+                            const std::size_t take = page_text_counts[index];
+                            std::vector<std::wstring> slice(
+                                translated.begin() + offset,
+                                translated.begin() + offset + take);
+                            offset += take;
+                            offline_translator::apply_layout_translations(
+                                &pages[index],
+                                slice);
+                        }
+                        if (config.output_png) {
+                            const std::wstring base =
+                                config.output_path.stem().wstring();
+                            for (std::size_t index = 0; index < pages.size();
+                                 ++index) {
+                                if (page_images[index].empty()) {
+                                    continue;
+                                }
+                                std::filesystem::path target =
+                                    config.output_path;
+                                if (pages.size() > 1) {
+                                    target =
+                                        config.output_path.parent_path() /
+                                        (base + L"-" +
+                                         std::to_wstring(index + 1) + L".png");
+                                }
+                                offline_translator::render_translated_image(
+                                    pages[index],
+                                    page_images[index],
+                                    image_widths[index],
+                                    image_heights[index],
+                                    target);
+                            }
+                        } else {
+                            offline_translator::export_layout_document(
+                                pages,
+                                config.output_path);
+                        }
+                        message = L"Перевод сохранён: " +
+                            config.output_path.filename().wstring();
+                        success = true;
+                    }
+                }
+            }
+        } catch (const std::exception& error) {
+            message = L"Ошибка перевода: " + from_utf8(error.what());
+        }
+    if (message_out != nullptr) {
+        *message_out = message;
+    }
+    return success;
+}
+
+void start_document_job(HWND main_window, ExcelJobConfig config) {
     if (!g_runtime) {
         return;
     }
     if (g_runtime->image_busy.exchange(true)) {
         offline_translator::app_log_warn(
-            "изображение: перевод пропущен, уже выполняется " + runtime_flags());
+            "документ: перевод пропущен, уже выполняется " + runtime_flags());
         return;
     }
     auto runtime = g_runtime;
-    set_status(L"Перевожу изображение…");
-    std::thread([main_window, config, runtime, bgra = std::move(bgra), width, height]() {
-        auto* payload = new StatusPayload();
+    set_status(L"Перевожу документ…");
+    std::thread([main_window, config = std::move(config), runtime]() mutable {
         std::wstring message;
-        bool success = false;
-        try {
-            offline_translator::OcrEngine engine;
-            engine.initialize_multi(config.ocr_languages);
-            int rotation = 0;
-            const auto layout = offline_translator::recognize_best_orientation(
-                engine,
-                bgra.data(),
-                width,
-                height,
-                width * 4,
-                4,
-                &rotation);
-            if (rotation != 0) {
-                offline_translator::app_log_info(
-                    "изображение: автоповорот " +
-                    std::to_string(rotation) + "°");
-            }
-            // Границы колонок берём из линий сетки на самом изображении.
-            int rotated_width = width;
-            int rotated_height = height;
-            std::vector<std::uint8_t> rotated;
-            if (rotation != 0) {
-                rotated = offline_translator::rotate_bgra_image(
-                    bgra.data(),
-                    width,
-                    height,
-                    width * 4,
-                    rotation,
-                    &rotated_width,
-                    &rotated_height);
-            }
-            const std::uint8_t* grid_image =
-                rotation != 0 ? rotated.data() : bgra.data();
-            const auto grid_columns =
-                offline_translator::detect_vertical_grid_lines(
-                    grid_image,
-                    rotated_width,
-                    rotated_height,
-                    rotated_width * 4);
-            auto page = offline_translator::build_layout_page(
-                layout,
-                grid_columns);
-            const auto texts = offline_translator::layout_texts(page);
-            if (texts.empty()) {
-                message = L"Текст на изображении не найден";
-            } else {
-                std::vector<std::wstring> translated;
-                if (translate_text_batch(
-                        config,
-                        runtime,
-                        texts,
-                        &translated,
-                        &message)) {
-                    offline_translator::apply_layout_translations(
-                        &page,
-                        translated);
-                    offline_translator::export_layout_page(
-                        page,
-                        config.output_path);
-                    message = L"Перевод сохранён: " +
-                        config.output_path.filename().wstring();
-                    success = true;
-                }
-            }
-        } catch (const std::exception& error) {
-            message = L"Ошибка перевода изображения: " +
-                from_utf8(error.what());
-        }
+        const bool success =
+            process_document(std::move(config), runtime, &message);
         runtime->image_busy = false;
+        auto* payload = new StatusPayload();
         payload->failed = !success;
         payload->text = message;
         if (runtime->closing || !IsWindow(main_window) ||
@@ -4690,15 +4936,29 @@ void start_image_path_translation(
         return;
     }
     if (g_runtime->image_busy) {
-        set_status(L"Уже перевожу изображение…");
+        set_status(L"Уже перевожу…");
         return;
     }
-    const auto ocr_languages = current_ocr_languages();
-    if (!ensure_ocr_languages(window, ocr_languages)) {
+    const bool is_pdf =
+        _wcsicmp(source.extension().c_str(), L".pdf") == 0;
+    std::vector<std::string> ocr_languages = current_ocr_languages();
+    if (is_pdf) {
+        // Для текстовых PDF OCR не нужен; на сканах используем только
+        // установленные языковые данные.
+        std::vector<std::string> installed;
+        const auto root = offline_translator::default_tessdata_root();
+        for (const auto& code : ocr_languages) {
+            if (offline_translator::tessdata_installed(code, root)) {
+                installed.push_back(code);
+            }
+        }
+        if (!installed.empty()) {
+            ocr_languages = installed;
+        }
+    } else if (!ensure_ocr_languages(window, ocr_languages)) {
         return;
     }
-    const std::wstring stem =
-        source.stem().wstring() + L" — перевод";
+    const std::wstring stem = source.stem().wstring() + L" — перевод";
     const auto output = choose_export_path(window, stem, source.parent_path());
     if (!output) {
         return;
@@ -4706,25 +4966,10 @@ void start_image_path_translation(
     ExcelJobConfig config = capture_job_config();
     config.ocr_languages = ocr_languages;
     config.output_path = *output;
-    auto image = offline_translator::load_image_file(source);
-    if (!image || image->bgra.empty()) {
-        const std::wstring message =
-            L"Не удалось прочитать изображение:\n" +
-            source.filename().wstring() +
-            L"\n\nПоддерживаются PNG, JPG, BMP, GIF, TIFF.";
-        localized_message_box(
-            window,
-            message.c_str(),
-            L"Перевод изображения",
-            MB_ICONERROR | MB_OK);
-        return;
-    }
-    start_image_job(
-        window,
-        config,
-        std::move(image->bgra),
-        image->width,
-        image->height);
+    config.source_path = source;
+    config.output_png =
+        _wcsicmp(output->extension().c_str(), L".png") == 0;
+    start_document_job(window, std::move(config));
 }
 
 void start_image_file_translation(HWND window) {
@@ -4774,12 +5019,12 @@ void start_image_region_translation(HWND window) {
     ExcelJobConfig config = capture_job_config();
     config.ocr_languages = ocr_languages;
     config.output_path = *output;
-    start_image_job(
-        window,
-        config,
-        std::move(image->bgra),
-        image->width,
-        image->height);
+    config.output_png =
+        _wcsicmp(output->extension().c_str(), L".png") == 0;
+    config.image = std::move(image->bgra);
+    config.image_width = image->width;
+    config.image_height = image->height;
+    start_document_job(window, std::move(config));
 }
 
 // Плавающая кнопка: перетащите на неё файл изображения.
@@ -8499,12 +8744,6 @@ LRESULT CALLBACK window_proc(
             }
             return 0;
         }
-        if (message == WM_COMMAND && LOWORD(w_param) == kTrayAutostart) {
-            if (!g_smoke_mode) {
-                toggle_app_autostart();
-            }
-            return 0;
-        }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayAutoCopy) {
             if (g_runtime) {
                 bool enabled = false;
@@ -9254,7 +9493,10 @@ int WINAPI wWinMain(
     // (автозапуск/трей) иначе продолжает перехватывать жесты и показывать
     // своё окно результата со старыми ошибками.
     HANDLE single_instance = nullptr;
-    if (!g_smoke_mode) {
+    const bool cli_translate =
+        command_has_flag(command_line, L"--translate-document") ||
+        command_has_flag(GetCommandLineW(), L"--translate-document");
+    if (!g_smoke_mode && !cli_translate) {
         single_instance = CreateMutexW(
             nullptr,
             TRUE,
@@ -9385,6 +9627,84 @@ int WINAPI wWinMain(
         " auto_copy=" + std::to_string(settings.auto_copy_selection) +
         " result=" + settings.result_window_mode +
         " theme=" + settings.ui_theme);
+    // Скрытый режим: перевод документа/PDF из консоли (отладка и пакетная
+    // обработка): TLing --translate-document <вход> <выход>.
+    if (command_has_flag(command_line, L"--translate-document") ||
+        command_has_flag(GetCommandLineW(), L"--translate-document")) {
+        int argument_count = 0;
+        LPWSTR* arguments =
+            CommandLineToArgvW(GetCommandLineW(), &argument_count);
+        std::filesystem::path input;
+        std::filesystem::path output;
+        if (arguments != nullptr) {
+            for (int index = 0; index + 2 < argument_count; ++index) {
+                if (_wcsicmp(arguments[index], L"--translate-document") == 0) {
+                    input = arguments[index + 1];
+                    output = arguments[index + 2];
+                    break;
+                }
+            }
+            LocalFree(arguments);
+        }
+        if (input.empty() || output.empty()) {
+            return 2;
+        }
+        ExcelJobConfig config;
+        config.engine =
+            offline_translator::engine_kind_from_settings(settings.engine);
+        config.models_root = model_root_for_kind(config.engine);
+        config.engine_variant =
+            config.engine == offline_translator::EngineKind::firefox
+                ? settings.architecture
+                : std::string{};
+        config.api_key = online_api_key_for_kind(config.engine);
+        config.target = settings.target_language;
+        config.fallback_target = settings.fallback_target_language;
+        if (settings.source_language != "auto" &&
+            !settings.source_language.empty()) {
+            config.manual_source = true;
+            config.source = settings.source_language;
+        }
+        config.separator = from_utf8(settings.append_separator);
+        config.source_path = input;
+        config.output_path = output;
+        config.output_png =
+            _wcsicmp(output.extension().c_str(), L".png") == 0;
+        const auto tessdata = offline_translator::default_tessdata_root();
+        for (const char* code : {"en", "ru"}) {
+            if (offline_translator::tessdata_installed(code, tessdata)) {
+                config.ocr_languages.push_back(code);
+            }
+        }
+        if (config.ocr_languages.empty()) {
+            config.ocr_languages.push_back("en");
+        }
+        Gdiplus::GdiplusStartupInput gdiplus_input{};
+        ULONG_PTR gdiplus_token = 0;
+        const bool gdiplus_ready =
+            Gdiplus::GdiplusStartup(
+                &gdiplus_token,
+                &gdiplus_input,
+                nullptr) == Gdiplus::Ok;
+        std::wstring message;
+        const bool ok =
+            process_document(std::move(config), g_runtime, &message);
+        if (gdiplus_ready) {
+            Gdiplus::GdiplusShutdown(gdiplus_token);
+        }
+        try {
+            std::ofstream status(
+                std::filesystem::path(output.wstring() + L".status.txt"),
+                std::ios::binary);
+            status << (ok ? "ok: " : "fail: ") << to_utf8(message);
+        } catch (const std::exception&) {
+        }
+        offline_translator::app_log_info(
+            "translate-document: " + (ok ? std::string("ok") : "fail") +
+            " " + to_utf8(message));
+        return ok ? 0 : 1;
+    }
+
     const int width = settings.window_width >= kMinWindowWidth
         ? settings.window_width
         : kDefaultWindowWidth;

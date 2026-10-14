@@ -299,10 +299,15 @@ LayoutPage build_layout_page(
                     if (column > static_cast<int>(columns.size())) {
                         // Последняя колонка: добираем остаток слов.
                         while (word_index < line_words.size()) {
-                            line.cells.back().text += L' ' +
-                                line_words[word_index]->text;
-                            line.cells.back().right =
-                                line_words[word_index]->right;
+                            const WordInfo* word = line_words[word_index];
+                            if (line.cells.back().text.empty()) {
+                                line.cells.back().left = word->left;
+                                line.cells.back().text = word->text;
+                            } else {
+                                line.cells.back().text +=
+                                    L' ' + word->text;
+                            }
+                            line.cells.back().right = word->right;
                             ++word_index;
                         }
                     }

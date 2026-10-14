@@ -1,5 +1,5 @@
 // Немецкий словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 203> kStringsDe{{
+constexpr std::array<Pair, 208> kStringsDe{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Ausgew\u00e4hlten Text automatisch in die Zwischenablage kopieren"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Version: "},
@@ -202,4 +202,9 @@ constexpr std::array<Pair, 203> kStringsDe{{
     {L"Текст на изображении не найден", L"Kein Text im Bild gefunden"},
     {L"Не удалось прочитать изображение", L"Bild konnte nicht gelesen werden"},
     {L"Перетащите файл сюда или дважды кликните", L"Datei hierher ziehen oder doppelklicken"},
+    {L"Изображение с переводом", L"Bild mit \u00dcbersetzung"},
+    {L"Изображения и PDF", L"Bilder und PDF"},
+    {L"Перевожу документ…", L"Dokument wird \u00fcbersetzt\u2026"},
+    {L"Не удалось открыть PDF", L"PDF konnte nicht ge\u00f6ffnet werden"},
+    {L"Текст не найден", L"Kein Text gefunden"},
 }};

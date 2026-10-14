@@ -1,5 +1,5 @@
 // Английский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 203> kStringsEn{{
+constexpr std::array<Pair, 208> kStringsEn{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Automatically copy the selected text to the clipboard"},
     {L"Автор: ", L"Author: "},
     {L"Версия: ", L"Version: "},
@@ -202,4 +202,9 @@ constexpr std::array<Pair, 203> kStringsEn{{
     {L"Текст на изображении не найден", L"No text found in the image"},
     {L"Не удалось прочитать изображение", L"Failed to read the image"},
     {L"Перетащите файл сюда или дважды кликните", L"Drop a file here or double-click"},
+    {L"Изображение с переводом", L"Image with translation"},
+    {L"Изображения и PDF", L"Images and PDF"},
+    {L"Перевожу документ…", L"Translating document…"},
+    {L"Не удалось открыть PDF", L"Failed to open the PDF"},
+    {L"Текст не найден", L"No text found"},
 }};

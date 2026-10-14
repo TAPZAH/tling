@@ -196,6 +196,8 @@ if (ENABLE_CTRANSLATE2)
             app/screen_ocr.cpp
             app/excel_com.cpp
             app/image_file.cpp
+            app/pdf_file.cpp
+            app/image_render.cpp
             app/tling.rc
         )
     endif()
@@ -230,6 +232,7 @@ if (ENABLE_CTRANSLATE2)
         target_include_directories(TLing
             PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdfium/include
         )
     endif()
     target_link_libraries(nllb_smoke
@@ -306,6 +309,16 @@ if (ENABLE_CTRANSLATE2)
                 oleaut32
         )
         offline_translator_deploy_ocr_runtime(TLing)
+        # PDFium: prebuilt DLL из third_party, линкуем и кладём рядом с exe.
+        target_link_libraries(TLing PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdfium/lib/pdfium.dll.lib"
+        )
+        add_custom_command(TARGET TLing POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdfium/bin/pdfium.dll"
+                "$<TARGET_FILE_DIR:TLing>/pdfium.dll"
+            COMMENT "Копирование pdfium.dll рядом с TLing"
+        )
         set(_app_ico "${CMAKE_CURRENT_SOURCE_DIR}/../assets/app.ico")
         if (EXISTS "${_app_ico}")
             add_custom_command(TARGET TLing POST_BUILD
@@ -514,6 +527,7 @@ if (WIN32)
     add_executable(image_layout_tests
         tests/image_layout_tests.cpp
         app/image_file.cpp
+        app/image_render.cpp
     )
     target_include_directories(image_layout_tests
         PRIVATE
@@ -530,6 +544,34 @@ if (WIN32)
         target_compile_options(image_layout_tests PRIVATE /EHsc /permissive- /utf-8)
     endif()
     add_test(NAME image_layout_tests COMMAND image_layout_tests)
+endif()
+
+if (WIN32)
+    add_executable(pdf_tests
+        tests/pdf_tests.cpp
+        app/pdf_file.cpp
+    )
+    target_include_directories(pdf_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/app
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdfium/include
+    )
+    target_link_libraries(pdf_tests
+        PRIVATE
+            offline_translator_core
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdfium/lib/pdfium.dll.lib"
+    )
+    add_custom_command(TARGET pdf_tests POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdfium/bin/pdfium.dll"
+            "$<TARGET_FILE_DIR:pdf_tests>/pdfium.dll"
+        COMMENT "Копирование pdfium.dll рядом с pdf_tests"
+    )
+    if (MSVC)
+        target_compile_options(pdf_tests PRIVATE /EHsc /permissive- /utf-8)
+    endif()
+    add_test(NAME pdf_tests COMMAND pdf_tests)
 endif()
 
 if (ENABLE_CTRANSLATE2 AND WIN32)

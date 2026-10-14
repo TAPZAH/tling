@@ -349,6 +349,7 @@ void OcrEngine::initialize(std::string_view language_code) {
             "Не удалось загрузить языковые данные OCR («" + tesseract_code +
             "»).");
     }
+    impl_->api.SetPageSegMode(tesseract::PSM_AUTO);
     impl_->language_code = std::string(language_code);
     impl_->initialized = true;
 }
@@ -392,6 +393,7 @@ void OcrEngine::initialize_multi(
         throw std::runtime_error(
             "Не удалось загрузить языковые данные OCR («" + spec + "»).");
     }
+    impl_->api.SetPageSegMode(tesseract::PSM_AUTO);
     impl_->language_code = cache_key;
     impl_->initialized = true;
 }

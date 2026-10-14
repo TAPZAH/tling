@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -111,16 +110,16 @@ void write_zip_file(
         record.size = static_cast<std::uint32_t>(data.size());
         record.offset = static_cast<std::uint32_t>(out.size());
         append_u32(out, 0x04034B50);
-        append_u16(out, 20);  // version needed
-        append_u16(out, 0);   // flags
-        append_u16(out, 0);   // stored
-        append_u16(out, 0);   // time
-        append_u16(out, 0x21);  // date (1980-01-01)
+        append_u16(out, 20);
+        append_u16(out, 0);
+        append_u16(out, 0);
+        append_u16(out, 0);
+        append_u16(out, 0x21);
         append_u32(out, record.crc);
         append_u32(out, record.size);
         append_u32(out, record.size);
         append_u16(out, static_cast<std::uint16_t>(name.size()));
-        append_u16(out, 0);  // extra length
+        append_u16(out, 0);
         out += name;
         out += data;
         central.push_back(std::move(record));
@@ -128,21 +127,21 @@ void write_zip_file(
     const std::uint32_t central_offset = static_cast<std::uint32_t>(out.size());
     for (const auto& record : central) {
         append_u32(out, 0x02014B50);
-        append_u16(out, 20);  // version made by
-        append_u16(out, 20);  // version needed
-        append_u16(out, 0);   // flags
-        append_u16(out, 0);   // stored
-        append_u16(out, 0);   // time
-        append_u16(out, 0x21);  // date
+        append_u16(out, 20);
+        append_u16(out, 20);
+        append_u16(out, 0);
+        append_u16(out, 0);
+        append_u16(out, 0);
+        append_u16(out, 0x21);
         append_u32(out, record.crc);
         append_u32(out, record.size);
         append_u32(out, record.size);
         append_u16(out, static_cast<std::uint16_t>(record.name.size()));
-        append_u16(out, 0);  // extra
-        append_u16(out, 0);  // comment
-        append_u16(out, 0);  // disk
-        append_u16(out, 0);  // internal attrs
-        append_u32(out, 0);  // external attrs
+        append_u16(out, 0);
+        append_u16(out, 0);
+        append_u16(out, 0);
+        append_u16(out, 0);
+        append_u32(out, 0);
         append_u32(out, record.offset);
         out += record.name;
     }
@@ -155,7 +154,7 @@ void write_zip_file(
     append_u16(out, static_cast<std::uint16_t>(central.size()));
     append_u32(out, central_size);
     append_u32(out, central_offset);
-    append_u16(out, 0);  // comment length
+    append_u16(out, 0);
     fs_utils::write_bytes(path, out.data(), out.size());
 }
 
@@ -183,7 +182,9 @@ std::string paragraph_xml(
     int font_half_points,
     int before_twips,
     const char* alignment,
-    int indent_twips = 0) {
+    int indent_twips,
+    bool bold,
+    bool italic) {
     std::string out = "<w:p><w:pPr>";
     if (indent_twips > 0) {
         out += "<w:ind w:left=\"" + std::to_string(indent_twips) + "\"/>";
@@ -195,8 +196,14 @@ std::string paragraph_xml(
     if (alignment != nullptr) {
         out += std::string("<w:jc w:val=\"") + alignment + "\"/>";
     }
-    out += "</w:pPr><w:r><w:rPr><w:sz w:val=\"" +
-        std::to_string(font_half_points) +
+    out += "</w:pPr><w:r><w:rPr>";
+    if (bold) {
+        out += "<w:b/>";
+    }
+    if (italic) {
+        out += "<w:i/>";
+    }
+    out += "<w:sz w:val=\"" + std::to_string(font_half_points) +
         "\"/></w:rPr><w:t xml:space=\"preserve\">" + xml_escape(text) +
         "</w:t></w:r></w:p>";
     return out;
@@ -206,8 +213,7 @@ std::string table_xml(
     const LayoutBlock& block,
     int font_half_points,
     int content_width,
-    const std::vector<int>& column_widths,
-    double pixel_to_twips) {
+    const std::vector<int>& column_widths) {
     const int columns = static_cast<int>(column_widths.size());
     int total = 0;
     for (const int width : column_widths) {
@@ -238,18 +244,24 @@ std::string table_xml(
         out += "<w:gridCol w:w=\"" + std::to_string(width) + "\"/>";
     }
     out += "</w:tblGrid>";
-    (void)pixel_to_twips;
     for (const auto& line : block.lines) {
         out += "<w:tr>";
         for (int column = 0; column < columns; ++column) {
-            const std::wstring text =
-                column < static_cast<int>(line.cells.size())
-                    ? line.cells[static_cast<std::size_t>(column)].text
-                    : std::wstring{};
+            LayoutCell cell;
+            if (column < static_cast<int>(line.cells.size())) {
+                cell = line.cells[static_cast<std::size_t>(column)];
+            }
             out += "<w:tc><w:tcPr><w:tcW w:w=\"" +
                 std::to_string(scaled[static_cast<std::size_t>(column)]) +
                 "\" w:type=\"dxa\"/></w:tcPr>" +
-                paragraph_xml(text, font_half_points, 0, nullptr) +
+                paragraph_xml(
+                    cell.text,
+                    font_half_points,
+                    0,
+                    nullptr,
+                    0,
+                    cell.bold,
+                    cell.italic) +
                 "</w:tc>";
         }
         out += "</w:tr>";
@@ -258,37 +270,12 @@ std::string table_xml(
     return out;
 }
 
-void export_docx(const LayoutPage& page, const std::filesystem::path& path) {
-    const int image_width = std::max(page.width, 1);
-    const int page_width_twips = 11906;  // A4
-    double page_height_twips = static_cast<double>(page_width_twips) *
-        std::max(page.height, 1) / image_width;
-    page_height_twips =
-        std::clamp(page_height_twips, 6000.0, 20000.0);
-    const double scale =
-        static_cast<double>(page_width_twips) / image_width;
-
-    int min_left = page_width_twips;
-    int min_top = static_cast<int>(page_height_twips);
-    for (const auto& block : page.blocks) {
-        min_left = std::min(min_left, block.left);
-        min_top = std::min(min_top, block.top);
-    }
-    if (min_left == page_width_twips) {
-        min_left = 0;
-    }
-    if (min_top == static_cast<int>(page_height_twips)) {
-        min_top = 0;
-    }
-    const int margin_left =
-        std::clamp(static_cast<int>(min_left * scale), 567, 2268);
-    const int margin_top =
-        std::clamp(static_cast<int>(min_top * scale), 567, 2268);
-    const int margin_right = 567;
-    const int margin_bottom = 567;
-    const int content_width =
-        page_width_twips - margin_left - margin_right;
-
+std::string build_docx_body(
+    const LayoutPage& page,
+    double scale,
+    int margin_left,
+    int content_width,
+    int image_width) {
     std::string body;
     int previous_bottom = -1;
     for (const auto& block : page.blocks) {
@@ -318,15 +305,14 @@ void export_docx(const LayoutPage& page, const std::filesystem::path& path) {
                 block,
                 font_half_points,
                 content_width,
-                widths,
-                scale);
+                widths);
             previous_bottom = block.bottom;
             continue;
         }
         for (const auto& line : block.lines) {
-            const std::wstring text = line.cells.empty()
-                ? std::wstring{}
-                : line.cells.front().text;
+            const LayoutCell cell = line.cells.empty()
+                ? LayoutCell{}
+                : line.cells.front();
             const int line_width = line.right - line.left;
             const char* alignment = nullptr;
             const int center = (line.left + line.right) / 2;
@@ -348,21 +334,68 @@ void export_docx(const LayoutPage& page, const std::filesystem::path& path) {
             int indent = 0;
             if (alignment == nullptr) {
                 indent = std::clamp(
-                    static_cast<int>((line.left - min_left) * scale),
+                    static_cast<int>((line.left - margin_left / scale) * scale),
                     0,
                     content_width / 2);
             }
             body += paragraph_xml(
-                text,
+                cell.text,
                 font_half_points,
                 before,
                 alignment,
-                indent);
+                indent,
+                cell.bold,
+                cell.italic);
             previous_bottom = line.bottom;
         }
     }
-    if (body.empty()) {
-        body = paragraph_xml(L"", 22, 0, nullptr);
+    return body;
+}
+
+void export_docx(
+    const std::vector<LayoutPage>& pages,
+    const std::filesystem::path& path) {
+    const LayoutPage empty;
+    const LayoutPage& first = pages.empty() ? empty : pages.front();
+    const int image_width = std::max(first.width, 1);
+    const int page_width_twips = 11906;  // A4
+    double page_height_twips = static_cast<double>(page_width_twips) *
+        std::max(first.height, 1) / image_width;
+    page_height_twips = std::clamp(page_height_twips, 6000.0, 20000.0);
+    const double scale =
+        static_cast<double>(page_width_twips) / image_width;
+
+    int min_left = page_width_twips;
+    for (const auto& block : first.blocks) {
+        min_left = std::min(min_left, block.left);
+    }
+    if (min_left == page_width_twips) {
+        min_left = 0;
+    }
+    const int margin_left =
+        std::clamp(static_cast<int>(min_left * scale), 567, 2268);
+    const int margin_top = 567;
+    const int margin_right = 567;
+    const int margin_bottom = 567;
+    const int content_width =
+        page_width_twips - margin_left - margin_right;
+
+    std::string body;
+    if (pages.empty()) {
+        body = paragraph_xml(L"", 22, 0, nullptr, 0, false, false);
+    } else {
+        for (std::size_t index = 0; index < pages.size(); ++index) {
+            if (index > 0) {
+                body +=
+                    "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>";
+            }
+            body += build_docx_body(
+                pages[index],
+                scale,
+                margin_left,
+                content_width,
+                image_width);
+        }
     }
     const std::string section =
         "<w:sectPr><w:pgSz w:w=\"" + std::to_string(page_width_twips) +
@@ -418,34 +451,41 @@ std::string column_name(int index) {
     return name;
 }
 
-void export_xlsx(const LayoutPage& page, const std::filesystem::path& path) {
+void export_xlsx(
+    const std::vector<LayoutPage>& pages,
+    const std::filesystem::path& path) {
     std::string rows_xml;
     std::vector<int> column_widths;
     int row = 1;
-    for (const auto& block : page.blocks) {
-        for (const auto& line : block.lines) {
-            rows_xml += "<row r=\"" + std::to_string(row) + "\">";
-            const std::size_t cells =
-                line.cells.empty() ? 1 : line.cells.size();
-            for (std::size_t column = 0; column < cells; ++column) {
-                const std::wstring text = line.cells.empty()
-                    ? std::wstring{}
-                    : line.cells[column].text;
-                if (column_widths.size() <= column) {
-                    column_widths.resize(column + 1, 0);
+    for (const auto& page : pages) {
+        for (const auto& block : page.blocks) {
+            for (const auto& line : block.lines) {
+                rows_xml += "<row r=\"" + std::to_string(row) + "\">";
+                const std::size_t cells =
+                    line.cells.empty() ? 1 : line.cells.size();
+                for (std::size_t column = 0; column < cells; ++column) {
+                    const std::wstring text = line.cells.empty()
+                        ? std::wstring{}
+                        : line.cells[column].text;
+                    if (column_widths.size() <= column) {
+                        column_widths.resize(column + 1, 0);
+                    }
+                    column_widths[column] = std::max(
+                        column_widths[column],
+                        static_cast<int>(text.size()));
+                    const std::string reference =
+                        column_name(static_cast<int>(column)) +
+                        std::to_string(row);
+                    rows_xml += "<c r=\"" + reference +
+                        "\" t=\"inlineStr\" s=\"1\"><is><t xml:space=\"preserve\">" +
+                        xml_escape(text) + "</t></is></c>";
                 }
-                column_widths[column] = std::max(
-                    column_widths[column],
-                    static_cast<int>(text.size()));
-                const std::string reference =
-                    column_name(static_cast<int>(column)) +
-                    std::to_string(row);
-                rows_xml += "<c r=\"" + reference +
-                    "\" t=\"inlineStr\" s=\"1\"><is><t xml:space=\"preserve\">" +
-                    xml_escape(text) + "</t></is></c>";
+                rows_xml += "</row>";
+                ++row;
             }
-            rows_xml += "</row>";
-            ++row;
+        }
+        if (!pages.empty()) {
+            ++row;  // пустая строка между страницами
         }
     }
     std::string cols_xml;
@@ -521,14 +561,20 @@ std::string lower_extension(const std::filesystem::path& path) {
 
 }  // анонимное пространство имён
 
+void export_layout_document(
+    const std::vector<LayoutPage>& pages,
+    const std::filesystem::path& path) {
+    if (lower_extension(path) == ".xlsx") {
+        export_xlsx(pages, path);
+    } else {
+        export_docx(pages, path);
+    }
+}
+
 void export_layout_page(
     const LayoutPage& page,
     const std::filesystem::path& path) {
-    if (lower_extension(path) == ".xlsx") {
-        export_xlsx(page, path);
-    } else {
-        export_docx(page, path);
-    }
+    export_layout_document(std::vector<LayoutPage>{page}, path);
 }
 
 }  // пространство имён offline_translator

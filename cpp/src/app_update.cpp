@@ -234,16 +234,30 @@ std::optional<UpdateInfo> check_for_update(
     if (releases.empty()) {
         throw std::runtime_error("На GitHub пока нет опубликованных релизов");
     }
-    if (!version_is_newer(releases.front().tag, local_version)) {
-        return std::nullopt;
+    // Берём самый новый релиз, который новее локальной версии и для которого
+    // есть подходящий файл. Если файлов нет ни у одного — возвращаем самый
+    // новый, чтобы UI предложил страницу релизов.
+    const InstallKind install_kind = detect_install_kind(app_dir);
+    std::optional<UpdateInfo> fallback;
+    for (const auto& release : releases) {
+        if (!version_is_newer(release.tag, local_version)) {
+            break;  // отсортировано по убыванию версии
+        }
+        if (!fallback) {
+            fallback = UpdateInfo{};
+            fallback->release = release;
+            fallback->install_kind = install_kind;
+        }
+        const auto* asset = choose_asset(release, install_kind);
+        if (asset != nullptr) {
+            UpdateInfo info;
+            info.release = release;
+            info.install_kind = install_kind;
+            info.asset = *asset;
+            return info;
+        }
     }
-    UpdateInfo info;
-    info.release = std::move(releases.front());
-    info.install_kind = detect_install_kind(app_dir);
-    if (const auto* asset = choose_asset(info.release, info.install_kind)) {
-        info.asset = *asset;
-    }
-    return info;
+    return fallback;
 }
 
 void download_update_asset(

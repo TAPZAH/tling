@@ -1,5 +1,5 @@
 // Испанский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 203> kStringsEs{{
+constexpr std::array<Pair, 208> kStringsEs{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copiar autom\u00e1ticamente el texto seleccionado al portapapeles"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Versi\u00f3n: "},
@@ -202,4 +202,9 @@ constexpr std::array<Pair, 203> kStringsEs{{
     {L"Текст на изображении не найден", L"No se encontr\u00f3 texto en la imagen"},
     {L"Не удалось прочитать изображение", L"No se pudo leer la imagen"},
     {L"Перетащите файл сюда или дважды кликните", L"Arrastre un archivo aqu\u00ed o haga doble clic"},
+    {L"Изображение с переводом", L"Imagen con traducci\u00f3n"},
+    {L"Изображения и PDF", L"Im\u00e1genes y PDF"},
+    {L"Перевожу документ…", L"Traduciendo el documento\u2026"},
+    {L"Не удалось открыть PDF", L"No se pudo abrir el PDF"},
+    {L"Текст не найден", L"No se encontr\u00f3 texto"},
 }};

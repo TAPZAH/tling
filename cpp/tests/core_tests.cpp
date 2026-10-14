@@ -1954,6 +1954,22 @@ int main() {
         require(
             !version_is_newer("0.995-beta", "0.995-beta"),
             "та же версия не новее");
+        // Готовность к версии 1.0: она должна считаться новее 0.99.9-beta.
+        require(
+            version_is_newer("v1.0", "0.99.9-beta"),
+            "1.0 новее 0.99.9-beta");
+        require(
+            version_is_newer("1.0", "1.0-beta"),
+            "релиз 1.0 новее 1.0-beta");
+        require(
+            !version_is_newer("1.0-beta", "1.0"),
+            "1.0-beta не новее релиза 1.0");
+        require(
+            version_is_newer("1.0.1", "1.0"),
+            "1.0.1 новее 1.0");
+        require(
+            parse_version("v1.0") == parse_version("1.0.0"),
+            "1.0 и 1.0.0 совпадают");
         GithubRelease release;
         release.tag = "v1.0.0";
         release.assets = {

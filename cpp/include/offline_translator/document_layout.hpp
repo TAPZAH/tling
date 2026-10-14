@@ -15,6 +15,8 @@ struct LayoutCell {
     std::wstring text;
     int left{0};
     int right{0};
+    bool bold{false};
+    bool italic{false};
 };
 
 struct LayoutLine {

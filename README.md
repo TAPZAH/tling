@@ -1,8 +1,8 @@
 ﻿# TLing — переводчик для Windows
 
-**TLing** — настольный переводчик для Windows 10/11 (x64): **четыре офлайн-движка** работают полностью локально на CPU, без интернета, плюс дополнительно **онлайн-перевод Google** (по желанию, без ключа или со своим ключом). Установщик или портативная папка. Версия **beta 0.99.9**.
+**TLing** — настольный переводчик для Windows 10/11 (x64): **четыре офлайн-движка** работают полностью локально на CPU, без интернета, плюс дополнительно **онлайн-перевод Google** (по желанию, без ключа или со своим ключом). Установщик или портативная папка. Версия **beta 0.1000**.
 
-**TLing** is a translator for Windows 10/11 (x64): four offline engines run locally on CPU with no internet, no API keys and no telemetry, plus an optional online Google engine. Version **beta 0.99.9**.
+**TLing** is a translator for Windows 10/11 (x64): four offline engines run locally on CPU with no internet, no API keys and no telemetry, plus an optional online Google engine. Version **beta 0.1000**.
 
 ---
 
@@ -56,9 +56,9 @@
 
 | Файл | Что внутри |
 |------|------------|
-| `tling-0.99.9-beta-setup.exe` | Установщик без моделей: движки и языковые данные OCR ставятся из окна «Пакеты» / по запросу |
-| `tling-0.99.9-beta-portable.zip` | Портативная папка без моделей (модели ставятся из окна «Пакеты») |
-| `tling-0.99.9-beta-src.zip` | Исходники |
+| `tling-0.1000-beta-setup.exe` | Установщик без моделей: движки и языковые данные OCR ставятся из окна «Пакеты» / по запросу |
+| `tling-0.1000-beta-portable.zip` | Портативная папка без моделей (модели ставятся из окна «Пакеты») |
+| `tling-0.1000-beta-src.zip` | Исходники |
 
 Сборки с предустановленными моделями (`setup-with-models.exe` ~900 МБ и
 `portable-with-models.zip`) собираются локально скриптом

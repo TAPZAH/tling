@@ -153,6 +153,20 @@ function Copy-LicenseFiles {
             -Force
     }
 
+    # PDFium и лицензии его зависимостей (BSD-3 и др.).
+    $pdfiumLicense = Join-Path $PSScriptRoot "third_party\pdfium\LICENSE"
+    if (Test-Path -LiteralPath $pdfiumLicense -PathType Leaf) {
+        Copy-Item -LiteralPath $pdfiumLicense `
+            -Destination (Join-Path $TargetDirectory "LICENSE-PDFium.txt") `
+            -Force
+    }
+    $pdfiumLicenses = Join-Path $PSScriptRoot "third_party\pdfium\licenses"
+    if (Test-Path -LiteralPath $pdfiumLicenses -PathType Container) {
+        Copy-Item -LiteralPath $pdfiumLicenses `
+            -Destination (Join-Path $TargetDirectory "pdfium") `
+            -Recurse -Force
+    }
+
     $ct2Candidates = @(
         (Join-Path $CTranslate2Dir "..\..\LICENSE"),
         "C:\deps\CTranslate2\LICENSE"
