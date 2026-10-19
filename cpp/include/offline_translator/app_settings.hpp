@@ -49,9 +49,8 @@ struct AppSettings {
     std::string append_separator{" / "};
     // Excel: перевод выделенных ячеек.
     bool excel_translation{true};
-    // hotkey | double_ctrl_c — чем вызывается перевод ячеек.
-    std::string excel_trigger{"hotkey"};
-    std::string excel_hotkey{"Ctrl+Alt+T"};
+    // Базовая клавиша вызова; свою можно задать в настройках.
+    std::string excel_hotkey{"Alt+E"};
     // clipboard | com | auto — как читать/писать ячейки Excel.
     std::string excel_write_method{"clipboard"};
     // Плавающая кнопка перевода изображений: файл перетаскивается на неё.
@@ -71,8 +70,6 @@ inline constexpr std::string_view kAppendSeparatorDash = " - ";
 inline constexpr std::string_view kExcelWriteClipboard = "clipboard";
 inline constexpr std::string_view kExcelWriteCom = "com";
 inline constexpr std::string_view kExcelWriteAuto = "auto";
-inline constexpr std::string_view kExcelTriggerHotkey = "hotkey";
-inline constexpr std::string_view kExcelTriggerDoubleCtrlC = "double_ctrl_c";
 inline constexpr std::string_view kOcrEngineAuto = "auto";
 inline constexpr std::string_view kOcrEngineTesseract = "tesseract";
 inline constexpr std::string_view kOcrEnginePaddle = "paddle";
@@ -90,7 +87,6 @@ std::string settings_engine_name(EngineKind engine_kind);
 std::string normalize_ui_theme(std::string_view theme);
 std::string normalize_append_separator(std::string_view separator);
 std::string normalize_excel_write_method(std::string_view method);
-std::string normalize_excel_trigger(std::string_view trigger);
 std::string normalize_ocr_engine(std::string_view engine);
 
 }  // пространство имён offline_translator

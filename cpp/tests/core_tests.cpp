@@ -1340,8 +1340,8 @@ int main() {
             missing.excel_translation,
             "excel_translation по умолчанию включён");
         require(
-            missing.excel_hotkey == "Ctrl+Alt+T",
-            "excel_hotkey по умолчанию Ctrl+Alt+T");
+            missing.excel_hotkey == "Alt+E",
+            "excel_hotkey по умолчанию Alt+E");
         require(
             missing.excel_write_method == "clipboard",
             "excel_write_method по умолчанию clipboard");
@@ -1364,23 +1364,6 @@ int main() {
         require(
             normalize_excel_write_method("??") == "clipboard",
             "неизвестный excel_write_method становится clipboard");
-        require(
-            missing.excel_trigger == "hotkey",
-            "excel_trigger по умолчанию hotkey");
-        loaded.excel_trigger = "double_ctrl_c";
-        save_settings(path, loaded);
-        {
-            const auto gesture = load_settings(path);
-            require(
-                gesture.excel_trigger == "double_ctrl_c",
-                "excel_trigger double_ctrl_c сохраняется");
-            require(
-                gesture.double_ctrl_c_translation,
-                "жест «двойное Ctrl+C» включает Ctrl+C+C");
-        }
-        require(
-            normalize_excel_trigger("??") == "hotkey",
-            "неизвестный excel_trigger становится hotkey");
         loaded.turbo_translation = true;
         save_settings(path, loaded);
         require(

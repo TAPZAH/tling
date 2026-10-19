@@ -16,7 +16,7 @@ struct Hotkey {
 };
 
 inline constexpr std::string_view kDefaultTranslateHotkey = "Ctrl+Shift+T";
-inline constexpr std::string_view kDefaultExcelHotkey = "Ctrl+Alt+T";
+inline constexpr std::string_view kDefaultExcelHotkey = "Alt+E";
 
 std::optional<Hotkey> parse_hotkey(std::string_view spec);
 std::string format_hotkey(const Hotkey& hotkey);

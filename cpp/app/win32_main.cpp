@@ -132,7 +132,6 @@ constexpr int kSettingsAppendSeparator = 1231;
 constexpr int kSettingsExcelEnabled = 1232;
 constexpr int kSettingsExcelHotkey = 1233;
 constexpr int kSettingsExcelMethod = 1234;
-constexpr int kSettingsExcelTrigger = 1235;
 constexpr int kSettingsOcrEngine = 1236;
 constexpr int kSettingsOcrOnly = 1237;
 constexpr int kResultCopyButton = 1302;
@@ -221,7 +220,6 @@ HWND g_settings_append_separator = nullptr;
 HWND g_settings_excel_enabled = nullptr;
 HWND g_settings_excel_hotkey = nullptr;
 HWND g_settings_excel_method = nullptr;
-HWND g_settings_excel_trigger = nullptr;
 HWND g_settings_ocr_engine = nullptr;
 HWND g_settings_ocr_only = nullptr;
 bool g_ocr_only_session = false;
@@ -4037,100 +4035,6 @@ void fill_excel_method_combo(HWND combo, std::string_view selected) {
         0);
 }
 
-// Пресеты вызова Excel-перевода: 0 — жест «двойное Ctrl+C»,
-// 1..4 — готовые комбинации, 5 — своя (набирается в поле нажатием).
-int excel_trigger_combo_index(
-    std::string_view trigger,
-    std::string_view hotkey) {
-    if (trigger == offline_translator::kExcelTriggerDoubleCtrlC) {
-        return 0;
-    }
-    if (hotkey == "Ctrl+Alt+T") {
-        return 1;
-    }
-    if (hotkey == "Ctrl+Shift+E") {
-        return 2;
-    }
-    if (hotkey == "Ctrl+Alt+E") {
-        return 3;
-    }
-    if (hotkey == "Alt+E") {
-        return 4;
-    }
-    return 5;
-}
-
-void fill_excel_trigger_combo(
-    HWND combo,
-    std::string_view trigger,
-    std::string_view hotkey) {
-    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    SendMessageW(
-        combo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Двойное Ctrl+C (как Ctrl+C+C)"));
-    SendMessageW(
-        combo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Ctrl+Alt+T"));
-    SendMessageW(
-        combo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Ctrl+Shift+E"));
-    SendMessageW(
-        combo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Ctrl+Alt+E"));
-    SendMessageW(
-        combo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Alt+E"));
-    SendMessageW(
-        combo,
-        CB_ADDSTRING,
-        0,
-        reinterpret_cast<LPARAM>(L"Своя комбинация…"));
-    SendMessageW(
-        combo,
-        CB_SETCURSEL,
-        excel_trigger_combo_index(trigger, hotkey),
-        0);
-}
-
-void update_excel_hotkey_field_state() {
-    if (!g_settings_excel_trigger || !g_settings_excel_hotkey) {
-        return;
-    }
-    const LRESULT index =
-        SendMessageW(g_settings_excel_trigger, CB_GETCURSEL, 0, 0);
-    EnableWindow(
-        g_settings_excel_hotkey,
-        index == 0 ? FALSE : TRUE);
-}
-
-void apply_excel_trigger_selection() {
-    if (!g_settings_excel_trigger || !g_settings_excel_hotkey) {
-        return;
-    }
-    const LRESULT index =
-        SendMessageW(g_settings_excel_trigger, CB_GETCURSEL, 0, 0);
-    if (index >= 1 && index <= 4) {
-        static const wchar_t* const specs[] = {
-            nullptr,
-            L"Ctrl+Alt+T",
-            L"Ctrl+Shift+E",
-            L"Ctrl+Alt+E",
-            L"Alt+E"};
-        SetWindowTextW(g_settings_excel_hotkey, specs[index]);
-    }
-    update_excel_hotkey_field_state();
-}
-
 // Поле горячей клавиши: комбинация записывается нажатием, а не набором.
 LRESULT CALLBACK hotkey_capture_subclass(
     HWND handle,
@@ -4185,15 +4089,6 @@ LRESULT CALLBACK hotkey_capture_subclass(
             from_utf8(offline_translator::format_hotkey(hotkey));
         SetWindowTextW(handle, spec.c_str());
         SendMessageW(handle, EM_SETSEL, spec.size(), spec.size());
-        if (g_settings_excel_trigger) {
-            SendMessageW(
-                g_settings_excel_trigger,
-                CB_SETCURSEL,
-                excel_trigger_combo_index(
-                    offline_translator::kExcelTriggerHotkey,
-                    to_utf8(spec)),
-                0);
-        }
         return 0;
     }
     return DefSubclassProc(handle, message, w_param, l_param);
@@ -5483,18 +5378,6 @@ void capture_selection_only(HWND main_window, bool translate_now = false) {
 void finish_double_ctrl_c(HWND main_window) {
     try {
         const std::wstring selected = clipboard_text();
-        // Excel: «двойное Ctrl+C» переводит выделенные ячейки на месте.
-        if (selected.size() >= 2 && g_runtime &&
-            g_runtime->settings.excel_translation &&
-            g_runtime->settings.excel_trigger ==
-                offline_translator::kExcelTriggerDoubleCtrlC &&
-            excel_is_foreground()) {
-            offline_translator::app_log_info(
-                "Ctrl+C+C: перевод ячеек Excel");
-            hide_selection_button();
-            start_excel_translation(main_window, selected);
-            return;
-        }
         if (selected.size() >= 2) {
             g_selection.selected_text = selected;
             g_selection.replace_hwnd = GetForegroundWindow();
@@ -6711,36 +6594,20 @@ void apply_settings_dialog(HWND settings_window) {
                 0,
                 0) == BST_CHECKED;
     }
-    if (g_settings_excel_trigger) {
-        const LRESULT index =
-            SendMessageW(g_settings_excel_trigger, CB_GETCURSEL, 0, 0);
-        settings.excel_trigger = index == 0
-            ? std::string{offline_translator::kExcelTriggerDoubleCtrlC}
-            : std::string{offline_translator::kExcelTriggerHotkey};
-    }
     if (g_settings_excel_hotkey) {
         const std::string spec =
             to_utf8(control_text(g_settings_excel_hotkey));
         if (const auto parsed = offline_translator::parse_hotkey(spec)) {
             settings.excel_hotkey =
                 offline_translator::format_hotkey(*parsed);
-        } else if (
-            settings.excel_translation &&
-            settings.excel_trigger ==
-                offline_translator::kExcelTriggerHotkey) {
+        } else if (settings.excel_translation) {
             localized_message_box(
                 settings_window,
-                L"Некорректная горячая клавиша Excel. Пример: Ctrl+Alt+T",
+                L"Некорректная горячая клавиша Excel. Пример: Alt+E",
                 L"Настройки",
                 MB_ICONWARNING | MB_OK);
             return;
         }
-    }
-    // Жест «двойное Ctrl+C» работает через общий Ctrl+C+C.
-    if (settings.excel_translation &&
-        settings.excel_trigger ==
-            offline_translator::kExcelTriggerDoubleCtrlC) {
-        settings.double_ctrl_c_translation = true;
     }
     if (g_settings_excel_method) {
         settings.excel_write_method =
@@ -6798,9 +6665,7 @@ void apply_settings_dialog(HWND settings_window) {
                 BST_CHECKED;
             offline_translator::set_app_autostart(autostart);
             if (g_runtime->main_window) {
-                if (!settings.excel_translation ||
-                    settings.excel_trigger ==
-                        offline_translator::kExcelTriggerDoubleCtrlC) {
+                if (!settings.excel_translation) {
                     UnregisterHotKey(g_runtime->main_window, kExcelHotkey);
                 } else if (!register_excel_hotkey(
                                g_runtime->main_window,
@@ -6865,7 +6730,6 @@ void close_settings_window() {
     g_settings_excel_enabled = nullptr;
     g_settings_excel_hotkey = nullptr;
     g_settings_excel_method = nullptr;
-    g_settings_excel_trigger = nullptr;
     g_settings_ocr_engine = nullptr;
     g_settings_ocr_only = nullptr;
     g_settings_check_update = nullptr;
@@ -7417,33 +7281,10 @@ LRESULT CALLBACK settings_proc_impl(
         content(
             kSettingsPageBehavior,
             L"STATIC",
-            L"Вызов Excel-перевода:",
-            0,
-            16,
-            764,
-            300,
-            18);
-        g_settings_excel_trigger = content(
-            kSettingsPageBehavior,
-            L"COMBOBOX",
-            nullptr,
-            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
-            16,
-            786,
-            260,
-            160,
-            kSettingsExcelTrigger);
-        fill_excel_trigger_combo(
-            g_settings_excel_trigger,
-            settings.excel_trigger,
-            settings.excel_hotkey);
-        content(
-            kSettingsPageBehavior,
-            L"STATIC",
             L"Горячая клавиша Excel:",
             0,
             16,
-            814,
+            764,
             300,
             18);
         g_settings_excel_hotkey = content(
@@ -7452,7 +7293,7 @@ LRESULT CALLBACK settings_proc_impl(
             from_utf8(settings.excel_hotkey).c_str(),
             WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
             16,
-            836,
+            786,
             240,
             24,
             kSettingsExcelHotkey);
@@ -7467,10 +7308,9 @@ LRESULT CALLBACK settings_proc_impl(
             L"Нажмите комбинацию в поле «Горячая клавиша Excel», чтобы задать свою.",
             0,
             264,
-            838,
+            788,
             222,
             36);
-        update_excel_hotkey_field_state();
         content(
             kSettingsPageBehavior,
             L"STATIC",
@@ -8020,10 +7860,6 @@ LRESULT CALLBACK settings_proc_impl(
         }
         if (id == kSettingsPopupModifier && notification == CBN_SELCHANGE) {
             update_behavior_summary();
-            return 0;
-        }
-        if (id == kSettingsExcelTrigger && notification == CBN_SELCHANGE) {
-            apply_excel_trigger_selection();
             return 0;
         }
         if (id == kSettingsSave) {
@@ -9993,7 +9829,6 @@ int WINAPI wWinMain(
             std::string(kScreenOcrHotkeySpec));
     }
     if (!g_smoke_mode && settings.excel_translation &&
-        settings.excel_trigger == offline_translator::kExcelTriggerHotkey &&
         !register_excel_hotkey(window, settings.excel_hotkey)) {
         offline_translator::app_log_warn(
             "не удалось зарегистрировать горячую клавишу Excel " +

@@ -257,8 +257,6 @@ AppSettings load_settings(const std::filesystem::path& path) {
             read_string(data, "append_separator", " / "));
         settings.excel_translation =
             read_bool(data, "excel_translation", true);
-        settings.excel_trigger = normalize_excel_trigger(
-            read_string(data, "excel_trigger", "hotkey"));
         settings.excel_hotkey = read_excel_hotkey(data);
         settings.excel_write_method = normalize_excel_write_method(
             read_string(data, "excel_write_method", "clipboard"));
@@ -271,10 +269,6 @@ AppSettings load_settings(const std::filesystem::path& path) {
         settings.ocr_engine = normalize_ocr_engine(
             read_string(data, "ocr_engine", "auto"));
         settings.ocr_only = read_bool(data, "ocr_only", false);
-        // Жест «двойное Ctrl+C» работает через общий Ctrl+C+C: включаем его.
-        if (settings.excel_trigger == kExcelTriggerDoubleCtrlC) {
-            settings.double_ctrl_c_translation = true;
-        }
     } catch (...) {
         return AppSettings{};
     }
@@ -306,10 +300,8 @@ void save_settings(
         normalize_popup_modifier(settings.popup_modifier);
     const bool popup_requires_ctrl = popup_modifier == kPopupModifierCtrl;
     const bool selection_popup_enabled = settings.selection_popup_enabled;
-    const auto excel_trigger = normalize_excel_trigger(settings.excel_trigger);
     const bool double_ctrl_c_translation =
-        (selection_popup_enabled ? settings.double_ctrl_c_translation : true) ||
-        excel_trigger == kExcelTriggerDoubleCtrlC;
+        selection_popup_enabled ? settings.double_ctrl_c_translation : true;
     data["popup_requires_ctrl"] = popup_requires_ctrl;
     data["popup_modifier"] = popup_modifier;
     data["double_ctrl_c_translation"] = double_ctrl_c_translation;
@@ -330,7 +322,6 @@ void save_settings(
     data["append_separator"] =
         normalize_append_separator(settings.append_separator);
     data["excel_translation"] = settings.excel_translation;
-    data["excel_trigger"] = excel_trigger;
     data["excel_hotkey"] = settings.excel_hotkey;
     data["excel_write_method"] =
         normalize_excel_write_method(settings.excel_write_method);
@@ -380,13 +371,6 @@ std::string normalize_excel_write_method(std::string_view method) {
         return std::string{kExcelWriteAuto};
     }
     return std::string{kExcelWriteClipboard};
-}
-
-std::string normalize_excel_trigger(std::string_view trigger) {
-    if (trigger == kExcelTriggerDoubleCtrlC) {
-        return std::string{kExcelTriggerDoubleCtrlC};
-    }
-    return std::string{kExcelTriggerHotkey};
 }
 
 std::string normalize_ocr_engine(std::string_view engine) {
