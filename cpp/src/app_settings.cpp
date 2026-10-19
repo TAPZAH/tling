@@ -153,7 +153,13 @@ std::string read_excel_hotkey(const nlohmann::json& data) {
         "excel_hotkey",
         std::string{kDefaultExcelHotkey});
     if (const auto parsed = parse_hotkey(spec)) {
-        return format_hotkey(*parsed);
+        const std::string formatted = format_hotkey(*parsed);
+        // Старый базовый вариант мигрируем на новый (Alt+E); если
+        // пользователь задал другую комбинацию — оставляем её.
+        if (formatted == "Ctrl+Alt+T") {
+            return std::string{kDefaultExcelHotkey};
+        }
+        return formatted;
     }
     return std::string{kDefaultExcelHotkey};
 }
