@@ -134,10 +134,12 @@ constexpr int kSettingsExcelHotkey = 1233;
 constexpr int kSettingsExcelMethod = 1234;
 constexpr int kSettingsExcelTrigger = 1235;
 constexpr int kSettingsOcrEngine = 1236;
+constexpr int kSettingsOcrOnly = 1237;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
 constexpr int kResultAddButton = 1305;
+constexpr int kResultOriginalButton = 1306;
 constexpr int kUpdateYesButton = 1401;
 constexpr int kUpdateNoButton = 1402;
 constexpr int kScreenOcrButton = 1010;
@@ -154,6 +156,7 @@ constexpr int kTrayScreenOcr = 3007;
 constexpr int kTrayImageFile = 3008;
 constexpr int kTrayImageRegion = 3009;
 constexpr int kTrayFloatButton = 3010;
+constexpr int kTrayOcrOnly = 3011;
 constexpr int kTrayHistoryRoot = 3097;
 constexpr int kTrayHistoryEmpty = 3098;
 constexpr int kTrayHistoryClear = 3099;
@@ -220,6 +223,8 @@ HWND g_settings_excel_hotkey = nullptr;
 HWND g_settings_excel_method = nullptr;
 HWND g_settings_excel_trigger = nullptr;
 HWND g_settings_ocr_engine = nullptr;
+HWND g_settings_ocr_only = nullptr;
+bool g_ocr_only_session = false;
 std::wstring g_hotkey_capture_backup;
 std::atomic<bool> g_update_busy{false};
 std::optional<offline_translator::UpdateInfo> g_pending_update;
@@ -229,8 +234,11 @@ HWND g_popup_result_edit = nullptr;
 HWND g_popup_copy_button = nullptr;
 HWND g_popup_replace_button = nullptr;
 HWND g_popup_add_button = nullptr;
+HWND g_popup_original_button = nullptr;
 HWND g_popup_header = nullptr;
 std::wstring g_popup_source_text;
+std::wstring g_popup_translation_text;
+bool g_popup_showing_original = false;
 HWND g_update_popup = nullptr;
 HWND g_update_popup_text = nullptr;
 HWND g_update_popup_yes = nullptr;
@@ -271,6 +279,8 @@ std::uint64_t g_app_start_tick = 0;
 struct StatusPayload {
     std::wstring text;
     bool failed{false};
+    std::string source_code;
+    std::string target_code;
 };
 
 struct UpdateCheckPayload {
@@ -2768,6 +2778,7 @@ void destroy_popup_windows() {
         g_popup_copy_button = nullptr;
         g_popup_replace_button = nullptr;
         g_popup_add_button = nullptr;
+        g_popup_original_button = nullptr;
     }
     hide_update_popup();
 }
@@ -2789,9 +2800,11 @@ const wchar_t* tray_menu_label(UINT id) {
         case kTrayImageFile:
             return L"Перевести изображение…";
         case kTrayImageRegion:
-            return L"Область экрана → Word/Excel";
+            return L"Перевод ячеек Word/Excel";
         case kTrayFloatButton:
             return L"Плавающая кнопка (перетащите файл)";
+        case kTrayOcrOnly:
+            return L"Только OCR (без перевода, до перезапуска)";
         case kTrayExit:
             return L"Выход";
         case kTrayHistoryRoot:
@@ -2960,6 +2973,16 @@ void show_tray_menu(HWND window) {
         float_flags,
         kTrayFloatButton,
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayFloatButton)));
+    UINT ocr_only_flags = MF_OWNERDRAW;
+    if (g_ocr_only_session ||
+        (g_runtime && g_runtime->settings.ocr_only)) {
+        ocr_only_flags |= MF_CHECKED;
+    }
+    AppendMenuW(
+        menu,
+        ocr_only_flags,
+        kTrayOcrOnly,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayOcrOnly)));
     AppendMenuW(
         menu,
         MF_OWNERDRAW,
@@ -3157,6 +3180,7 @@ void hide_result_popup() {
         g_popup_copy_button = nullptr;
         g_popup_replace_button = nullptr;
         g_popup_add_button = nullptr;
+        g_popup_original_button = nullptr;
         g_popup_header = nullptr;
     }
 }
@@ -3353,16 +3377,24 @@ void show_selection_button(int cursor_x, int cursor_y, HWND main_window) {
     SetTimer(main_window, kSelectionButtonHideTimer, 8000, nullptr);
 }
 
+bool ocr_only_active() {
+    return g_ocr_only_session ||
+        (g_runtime != nullptr && g_runtime->settings.ocr_only);
+}
+
 void show_result_popup(
     HWND main_window,
     const std::wstring& text,
     const std::string& source_code,
-    const std::string& target_code) {
+    const std::string& target_code,
+    bool original_only = false) {
     hide_selection_button();
     hide_result_popup();
-    // Оригинал для кнопки «Добавить»: выделенный текст на момент показа
-    // окна перевода (позже выделение в чужом окне могло уже пропасть).
+    // Оригинал для кнопки «Добавить»/«Показать оригинал»: выделенный текст
+    // на момент показа окна (позже выделение в чужом окне могло пропасть).
     g_popup_source_text = trim_trailing_whitespace(g_selection.selected_text);
+    g_popup_translation_text = text;
+    g_popup_showing_original = false;
     POINT cursor{};
     GetCursorPos(&cursor);
     const bool selectable = g_runtime &&
@@ -3412,9 +3444,11 @@ void show_result_popup(
         return;
     }
 
-    const std::wstring header = from_utf8(
-        offline_translator::language_store_name(source_code) + " > " +
-        offline_translator::language_store_name(target_code));
+    const std::wstring header = original_only
+        ? from_utf8(offline_translator::language_store_name(source_code))
+        : from_utf8(
+              offline_translator::language_store_name(source_code) + " > " +
+              offline_translator::language_store_name(target_code));
     g_popup_header = CreateWindowW(
         L"STATIC",
         header.c_str(),
@@ -3480,10 +3514,35 @@ void show_result_popup(
         1,
         0);
     const bool show_replace =
-        !g_screen_ocr_mode && text.rfind(L"Ошибка:", 0) != 0;
+        !original_only && !g_screen_ocr_mode &&
+        text.rfind(L"Ошибка:", 0) != 0;
     const bool show_add = show_replace && !g_popup_source_text.empty();
     g_popup_replace_button = nullptr;
     g_popup_add_button = nullptr;
+    g_popup_original_button = nullptr;
+    // Маленькая квадратная кнопка «показ оригинала»: переключает текст в
+    // окне между переводом и исходным текстом.
+    if (!original_only && !g_popup_source_text.empty() &&
+        text.rfind(L"Ошибка:", 0) != 0 &&
+        g_popup_source_text != g_popup_translation_text) {
+        g_popup_original_button = CreateWindowW(
+            L"BUTTON",
+            L"О",
+            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | BS_PUSHLIKE,
+            border + pad_x,
+            buttons_y,
+            28,
+            button_height,
+            g_result_popup,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kResultOriginalButton)),
+            nullptr,
+            nullptr);
+        SendMessageW(
+            g_popup_original_button,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(popup_font(PopupFont::button)),
+            TRUE);
+    }
     int next_left = copy_x;
     if (show_add) {
         next_left = copy_x - 96 - 8;
@@ -3670,6 +3729,8 @@ void start_selection_translation(HWND main_window) {
             result->text = from_utf8(
                 application.translate(text, direction.first, direction.second)
                     .text);
+            result->source_code = direction.first;
+            result->target_code = direction.second;
             runtime->session.mark_loaded();
             offline_translator::app_log_info(
                 "перевод выделения готов ms=" +
@@ -3912,8 +3973,22 @@ void start_screen_ocr(HWND window) {
     if (g_source_edit) {
         SetWindowTextW(g_source_edit, recognized.c_str());
     }
-    // start_selection_translation сам выставит selection_busy.
     g_runtime->selection_busy = false;
+    if (ocr_only_active()) {
+        // Режим «только OCR»: показываем распознанный оригинал без перевода.
+        // Язык — реально определённый по распознанному тексту.
+        const std::string detected =
+            detect_source_language(to_utf8(recognized), selected_engine());
+        set_status(L"Распознанный текст (без перевода)");
+        show_result_popup(
+            window,
+            recognized,
+            detected,
+            std::string{},
+            /*original_only=*/true);
+        return;
+    }
+    // start_selection_translation сам выставит selection_busy.
     start_selection_translation(window);
 }
 
@@ -6423,6 +6498,26 @@ LRESULT CALLBACK result_popup_proc_impl(
             }
             return 0;
         }
+        if (id == kResultOriginalButton) {
+            const bool show_original =
+                SendMessageW(
+                    g_popup_original_button, BM_GETCHECK, 0, 0) ==
+                BST_CHECKED;
+            g_popup_showing_original = show_original;
+            if (g_popup_result_edit) {
+                SetWindowTextW(
+                    g_popup_result_edit,
+                    (show_original ? g_popup_source_text
+                                   : g_popup_translation_text)
+                        .c_str());
+                SendMessageW(
+                    g_popup_result_edit,
+                    EM_SETSEL,
+                    static_cast<WPARAM>(-1),
+                    0);
+            }
+            return 0;
+        }
         if (id == kResultAddButton) {
             offline_translator::app_log_info("add: клик по кнопке");
             const std::wstring text = g_popup_result_edit
@@ -6546,6 +6641,7 @@ LRESULT CALLBACK result_popup_proc_impl(
             g_popup_copy_button = nullptr;
             g_popup_replace_button = nullptr;
             g_popup_add_button = nullptr;
+            g_popup_original_button = nullptr;
             g_popup_header = nullptr;
         }
         return 0;
@@ -6652,6 +6748,11 @@ void apply_settings_dialog(HWND settings_window) {
     }
     if (g_settings_ocr_engine) {
         settings.ocr_engine = ocr_engine_from_combo(g_settings_ocr_engine);
+    }
+    if (g_settings_ocr_only) {
+        settings.ocr_only =
+            SendMessageW(g_settings_ocr_only, BM_GETCHECK, 0, 0) ==
+            BST_CHECKED;
     }
     settings.ui_theme =
         g_settings_theme_dark &&
@@ -6766,6 +6867,7 @@ void close_settings_window() {
     g_settings_excel_method = nullptr;
     g_settings_excel_trigger = nullptr;
     g_settings_ocr_engine = nullptr;
+    g_settings_ocr_only = nullptr;
     g_settings_check_update = nullptr;
     g_settings_install_update = nullptr;
     g_settings_open_releases = nullptr;
@@ -7429,6 +7531,21 @@ LRESULT CALLBACK settings_proc_impl(
             1050,
             470,
             54);
+        g_settings_ocr_only = content(
+            kSettingsPageBehavior,
+            L"BUTTON",
+            L"Только OCR всегда (распознавать область экрана без перевода)",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            1108,
+            470,
+            24,
+            kSettingsOcrOnly);
+        SendMessageW(
+            g_settings_ocr_only,
+            BM_SETCHECK,
+            settings.ocr_only ? BST_CHECKED : BST_UNCHECKED,
+            0);
         // ===== Страница «Темы» =====
         HWND themes_title = content(
             kSettingsPageThemes,
@@ -8916,6 +9033,23 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             show_float_button(show);
             return 0;
         }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTrayOcrOnly) {
+            const bool enable = !g_ocr_only_session;
+            g_ocr_only_session = enable;
+            if (enable && !(g_runtime && g_runtime->settings.ocr_only)) {
+                localized_message_box(
+                    window,
+                    L"Режим «Только OCR» включён до перезапуска программы.\n\n"
+                    L"Чтобы включить навсегда, отметьте «Только OCR всегда» "
+                    L"в Настройки → Поведение.",
+                    L"Только OCR",
+                    MB_ICONINFORMATION | MB_OK);
+            }
+            set_status(enable
+                ? L"Режим «Только OCR» включён (до перезапуска)"
+                : L"Режим «Только OCR» выключен");
+            return 0;
+        }
         if (message == kUpdateCheckDoneMessage) {
             // Проверка была запущена из трея: показываем результат
             // всплывающим сообщением, а настройки открываем только когда
@@ -9171,11 +9305,19 @@ if (message == kTranslateMessage) {
                 reinterpret_cast<StatusPayload*>(l_param));
             const auto direction = selection_translation_direction(
                 g_selection.selected_text);
+            // Показываем фактически использованную пару (автоопределение,
+            // смена направления), а не текущие значения из настроек.
+            const std::string source_code = result->source_code.empty()
+                ? direction.first
+                : result->source_code;
+            const std::string target_code = result->target_code.empty()
+                ? direction.second
+                : result->target_code;
             show_result_popup(
                 window,
                 result->text,
-                direction.first,
-                direction.second);
+                source_code,
+                target_code);
             g_screen_ocr_mode = false;
             if (result->failed) {
                 set_status(L"Ошибка перевода выделения");

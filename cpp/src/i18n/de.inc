@@ -186,7 +186,7 @@ constexpr std::array<Pair, 208> kStringsDe{{
     {L"Нажмите комбинацию в поле «Горячая клавиша Excel», чтобы задать свою.", L"Dr\u00fccken Sie die Kombination im Feld \u00abExcel-Tastenk\u00fcrzel\u00bb, um eine eigene festzulegen."},
     {L"Изображение…", L"Bild\u2026"},
     {L"Перевести изображение…", L"Bild \u00fcbersetzen\u2026"},
-    {L"Область экрана → Word/Excel", L"Bildschirmbereich \u2192 Word/Excel"},
+    {L"Перевод ячеек Word/Excel", L"Word/Excel-Zellen \u00fcbersetzen"},
     {L"Плавающая кнопка (перетащите файл)", L"Schwebende Schaltfl\u00e4che (Datei ziehen)"},
     {L"Перевод изображения", L"Bild\u00fcbersetzung"},
     {L"перетащите файл сюда", L"Datei hierher ziehen"},

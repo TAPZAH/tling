@@ -1329,6 +1329,14 @@ int main() {
             normalize_append_separator("??") == " / ",
             "неизвестный append_separator становится ' / '");
         require(
+            !missing.ocr_only,
+            "ocr_only по умолчанию выключен");
+        loaded.ocr_only = true;
+        save_settings(path, loaded);
+        require(
+            load_settings(path).ocr_only,
+            "ocr_only сохраняется");
+        require(
             missing.excel_translation,
             "excel_translation по умолчанию включён");
         require(

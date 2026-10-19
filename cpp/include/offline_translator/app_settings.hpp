@@ -60,6 +60,8 @@ struct AppSettings {
     int image_float_button_y{-1};
     // auto | tesseract | paddle — движок распознавания текста (OCR).
     std::string ocr_engine{"auto"};
+    // Только OCR: вместо перевода показывать распознанный оригинал.
+    bool ocr_only{false};
 };
 
 inline constexpr std::string_view kUiThemeLight = "light";

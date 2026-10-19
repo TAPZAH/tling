@@ -270,6 +270,7 @@ AppSettings load_settings(const std::filesystem::path& path) {
             read_int(data, "image_float_button_y", -1);
         settings.ocr_engine = normalize_ocr_engine(
             read_string(data, "ocr_engine", "auto"));
+        settings.ocr_only = read_bool(data, "ocr_only", false);
         // Жест «двойное Ctrl+C» работает через общий Ctrl+C+C: включаем его.
         if (settings.excel_trigger == kExcelTriggerDoubleCtrlC) {
             settings.double_ctrl_c_translation = true;
@@ -337,6 +338,7 @@ void save_settings(
     data["image_float_button_x"] = settings.image_float_button_x;
     data["image_float_button_y"] = settings.image_float_button_y;
     data["ocr_engine"] = normalize_ocr_engine(settings.ocr_engine);
+    data["ocr_only"] = settings.ocr_only;
     fs_utils::write_text_file(path, data.dump(2) + "\n");
 }
 
