@@ -3401,7 +3401,7 @@ void show_result_popup(
     constexpr int border = 1;
     constexpr int pad_x = 16;
     constexpr int pad_y = 14;
-    const int width = 420;
+    const int width = 480;
     const int content_width = width - 2 * border - 2 * pad_x;
 
     // Высота текстового поля: 2..12 строк с переносом, как в Python.
@@ -3526,7 +3526,7 @@ void show_result_popup(
         g_popup_original_button = CreateWindowW(
             L"BUTTON",
             L"О",
-            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | BS_PUSHLIKE,
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             border + pad_x,
             buttons_y,
             28,
@@ -3540,6 +3540,11 @@ void show_result_popup(
             WM_SETFONT,
             reinterpret_cast<WPARAM>(popup_font(PopupFont::button)),
             TRUE);
+        SetWindowSubclass(
+            g_popup_original_button,
+            flat_button_subclass,
+            1,
+            0);
     }
     int next_left = copy_x;
     if (show_add) {
@@ -6382,11 +6387,8 @@ LRESULT CALLBACK result_popup_proc_impl(
             return 0;
         }
         if (id == kResultOriginalButton) {
-            const bool show_original =
-                SendMessageW(
-                    g_popup_original_button, BM_GETCHECK, 0, 0) ==
-                BST_CHECKED;
-            g_popup_showing_original = show_original;
+            g_popup_showing_original = !g_popup_showing_original;
+            const bool show_original = g_popup_showing_original;
             if (g_popup_result_edit) {
                 SetWindowTextW(
                     g_popup_result_edit,
@@ -6398,6 +6400,14 @@ LRESULT CALLBACK result_popup_proc_impl(
                     EM_SETSEL,
                     static_cast<WPARAM>(-1),
                     0);
+            }
+            // Кнопка показывает действие: «О» — показать оригинал,
+            // «П» — вернуться к переводу.
+            if (g_popup_original_button) {
+                SetWindowTextW(
+                    g_popup_original_button,
+                    show_original ? L"П" : L"О");
+                InvalidateRect(g_popup_original_button, nullptr, TRUE);
             }
             return 0;
         }
@@ -6485,6 +6495,20 @@ LRESULT CALLBACK result_popup_proc_impl(
         return 0;
     }
     if (message == WM_LBUTTONUP && click_to_close) {
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        const auto over = [&cursor](HWND button) {
+            if (!button || !IsWindow(button)) {
+                return false;
+            }
+            RECT bounds{};
+            GetWindowRect(button, &bounds);
+            return PtInRect(&bounds, cursor) != FALSE;
+        };
+        if (over(g_popup_copy_button) || over(g_popup_replace_button) ||
+            over(g_popup_add_button) || over(g_popup_original_button)) {
+            return 0;
+        }
         offline_translator::app_log_info("popup: WM_LBUTTONUP (закрываю)");
         hide_result_popup();
         return 0;
@@ -6507,7 +6531,8 @@ LRESULT CALLBACK result_popup_proc_impl(
         const bool on_action_button =
             over_button(g_popup_copy_button) ||
             over_button(g_popup_replace_button) ||
-            over_button(g_popup_add_button);
+            over_button(g_popup_add_button) ||
+            over_button(g_popup_original_button);
         offline_translator::app_log_info(
             "popup: нажатие в " + std::to_string(cursor.x) + "," +
             std::to_string(cursor.y) +

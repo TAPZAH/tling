@@ -95,7 +95,7 @@ std::string http_get_text(const std::string& url) {
     parse_url(wide_url, host, path);
 
     WinHttpHandle session(::WinHttpOpen(
-        L"TLing/0.1002 (online translate)",
+        L"TLing/0.1003 (online translate)",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,
