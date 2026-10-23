@@ -685,6 +685,37 @@ int main() {
         std::filesystem::remove_all(source_pkg.parent_path());
     }
     {
+        // Старый формат Argos: файлы лежат в каталоге «en_ru», а не
+        // «translate-en_ru-1_9».
+        const auto source_pkg =
+            std::filesystem::temp_directory_path() /
+            "offline-translator-argos-legacy" / "en_ru";
+        std::filesystem::remove_all(source_pkg.parent_path());
+        write_argos_package_files(source_pkg);
+        const auto zip_path =
+            source_pkg.parent_path() / "legacy.argosmodel";
+        write_store_zip(
+            zip_path,
+            {
+                {"en_ru/model/model.bin",
+                 source_pkg / "model" / "model.bin"},
+                {"en_ru/model/config.json",
+                 source_pkg / "model" / "config.json"},
+                {"en_ru/model/shared_vocabulary.json",
+                 source_pkg / "model" / "shared_vocabulary.json"},
+                {"en_ru/sentencepiece.model",
+                 source_pkg / "sentencepiece.model"},
+            });
+        ArgosModelManager legacy(argos_mgmt_root, "en", "ru");
+        legacy.set_package_url(zip_path.string());
+        legacy.download_and_install();
+        require(
+            legacy.is_installed(),
+            "Argos установлен из архива старого формата (en_ru)");
+        legacy.uninstall();
+        std::filesystem::remove_all(source_pkg.parent_path());
+    }
+    {
         const auto& languages = supported_languages();
         require(languages.size() == 64, "таблица языков: 64 записи");
         std::set<std::string> unique_codes;

@@ -560,6 +560,18 @@ void ArgosModelManager::download_and_install(const ProgressCallback& progress) {
             break;
         }
     }
+    // Старые пакеты Argos (v1.0) кладут файлы в каталог вида «ar_en», а не
+    // «translate-ar_en-1_0». Принимаем любой верхний каталог, в котором
+    // лежат нужные файлы пакета.
+    if (extracted_package.empty()) {
+        for (const auto& entry :
+             std::filesystem::directory_iterator(extract_root)) {
+            if (entry.is_directory() && package_files_ready(entry.path())) {
+                extracted_package = entry.path();
+                break;
+            }
+        }
+    }
     if (extracted_package.empty() &&
         package_files_ready(extract_root)) {
         extracted_package = extract_root;
