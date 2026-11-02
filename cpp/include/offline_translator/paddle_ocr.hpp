@@ -35,6 +35,17 @@ void download_ppocr_script(
     const ProgressCallback& progress = {},
     const std::filesystem::path& root = {});
 
+// «Точный» режим: серверный детектор PP-OCRv5 (det_server.onnx). Качественнее
+// на сложных сканах/фото, но заметно медленнее. Флаг читается при инициализации.
+void set_ppocr_accurate(bool accurate);
+bool ppocr_accurate();
+// Установлен ли серверный детектор в каталоге.
+bool ppocr_server_det_installed(const std::filesystem::path& root = {});
+// Докачивает серверный детектор (~87 МБ).
+void download_ppocr_server_det(
+    const ProgressCallback& progress = {},
+    const std::filesystem::path& root = {});
+
 // OCR на моделях PaddleOCR (PP-OCR) через ONNX Runtime. Детектор текстовых
 // регионов (DBNet) + CTC-распознаватель по скрипту. Не потокобезопасен.
 class PaddleOcrEngine {

@@ -201,9 +201,11 @@ bool excel_cell_translatable(std::wstring_view cell) {
         return false;
     }
     // Машинные строки (пароли ЭЦП, коды проверки, серийники): букв мало
-    // относительно цифр/символов — переводить бессмысленно.
+    // относительно цифр/символов — переводить бессмысленно. Текст с CJK
+    // не фильтруем: это реальные подписи полей даже с номерами.
     {
         std::size_t letters = 0;
+        std::size_t cjk = 0;
         std::size_t meaningful = 0;
         for (const wchar_t symbol : trimmed) {
             if (symbol == L' ' || symbol == L'\t') {
@@ -213,12 +215,15 @@ bool excel_cell_translatable(std::wstring_view cell) {
             const bool latin = (symbol >= L'A' && symbol <= L'Z') ||
                 (symbol >= L'a' && symbol <= L'z');
             const bool cyrillic = symbol >= 0x0400 && symbol <= 0x04FF;
-            const bool cjk = symbol >= 0x4E00 && symbol <= 0x9FFF;
-            if (latin || cyrillic || cjk) {
+            const bool cjk_symbol = symbol >= 0x4E00 && symbol <= 0x9FFF;
+            if (latin || cyrillic || cjk_symbol) {
                 ++letters;
             }
+            if (cjk_symbol) {
+                ++cjk;
+            }
         }
-        if (meaningful >= 6 && letters * 2 < meaningful) {
+        if (cjk == 0 && meaningful >= 6 && letters * 2 < meaningful) {
             return false;
         }
     }

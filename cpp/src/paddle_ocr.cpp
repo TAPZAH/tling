@@ -181,6 +181,43 @@ void download_ppocr_script(
 }
 
 namespace {
+bool g_accurate_det = false;
+}  // пространство имён
+
+void set_ppocr_accurate(bool accurate) {
+    g_accurate_det = accurate;
+}
+
+bool ppocr_accurate() {
+    return g_accurate_det;
+}
+
+bool ppocr_server_det_installed(const std::filesystem::path& root) {
+    const auto dir = root.empty() ? default_ppocr_root() : root;
+    if (dir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(dir / "det_server.onnx", ec) && !ec;
+}
+
+void download_ppocr_server_det(
+    const ProgressCallback& progress,
+    const std::filesystem::path& root) {
+    const auto dir = root.empty() ? default_ppocr_root() : root;
+    if (dir.empty()) {
+        throw std::runtime_error("ppocr: не найден каталог моделей");
+    }
+    std::filesystem::create_directories(dir);
+    download_resumable(
+        {"https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/"
+         "v3.10.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_server.onnx"},
+        dir / "det_server.onnx",
+        progress,
+        "Точная модель OCR (детектор PP-OCRv5)");
+}
+
+namespace {
 
 // --- изображения -----------------------------------------------------------
 
@@ -1425,7 +1462,13 @@ void PaddleOcrEngine::initialize(std::string_view language_code) {
         throw std::runtime_error("ppocr: не найден каталог моделей");
     }
     if (impl_->det.session == nullptr) {
-        impl_->det = open_session(dir / "det.onnx");
+        const auto server_det = dir / "det_server.onnx";
+        std::error_code ec;
+        if (g_accurate_det && std::filesystem::exists(server_det, ec) && !ec) {
+            impl_->det = open_session(server_det);
+        } else {
+            impl_->det = open_session(dir / "det.onnx");
+        }
     }
     if (impl_->doc_ori.session == nullptr) {
         const auto ori_path = dir / "doc_ori.onnx";

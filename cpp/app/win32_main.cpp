@@ -135,6 +135,7 @@ constexpr int kSettingsExcelMethod = 1234;
 constexpr int kSettingsOcrEngine = 1236;
 constexpr int kSettingsOcrOnly = 1237;
 constexpr int kSettingsFloatButton = 1238;
+constexpr int kSettingsOcrQuality = 1239;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
@@ -222,6 +223,7 @@ HWND g_settings_excel_enabled = nullptr;
 HWND g_settings_excel_hotkey = nullptr;
 HWND g_settings_excel_method = nullptr;
 HWND g_settings_ocr_engine = nullptr;
+HWND g_settings_ocr_quality = nullptr;
 HWND g_settings_ocr_only = nullptr;
 HWND g_settings_float_button = nullptr;
 bool g_ocr_only_session = false;
@@ -895,6 +897,29 @@ void fill_ocr_engine_combo(HWND combo, std::string_view selected) {
     SendMessageW(combo, CB_SETCURSEL, ocr_engine_combo_index(selected), 0);
 }
 
+void fill_ocr_quality_combo(HWND combo, std::string_view selected) {
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Быстро (мобильная модель)"));
+    SendMessageW(
+        combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Точно (серверный детектор, ~87 МБ)"));
+    SendMessageW(
+        combo,
+        CB_SETCURSEL,
+        selected == "accurate" ? 1 : 0,
+        0);
+}
+
+std::string ocr_quality_from_combo(HWND combo) {
+    return SendMessageW(combo, CB_GETCURSEL, 0, 0) == 1 ? "accurate" : "fast";
+}
+
 void apply_ocr_backend_from_settings(
     const offline_translator::AppSettings& settings) {
     const std::filesystem::path ppocr_root =
@@ -909,6 +934,7 @@ void apply_ocr_backend_from_settings(
         backend = offline_translator::OcrBackend::Paddle;
     }
     offline_translator::set_ocr_backend(backend, ppocr_root);
+    offline_translator::set_ppocr_accurate(settings.ocr_quality == "accurate");
     offline_translator::app_log_info(
         std::string("OCR backend: ") +
         (backend == offline_translator::OcrBackend::Paddle ? "paddle"
@@ -6940,6 +6966,33 @@ void apply_settings_dialog(HWND settings_window) {
     if (g_settings_ocr_engine) {
         settings.ocr_engine = ocr_engine_from_combo(g_settings_ocr_engine);
     }
+    if (g_settings_ocr_quality) {
+        settings.ocr_quality = ocr_quality_from_combo(g_settings_ocr_quality);
+        if (settings.ocr_quality == "accurate" &&
+            !offline_translator::ppocr_server_det_installed()) {
+            const bool confirmed = localized_message_box(
+                settings_window,
+                L"Для режима «Точно» нужна серверная модель детектора OCR "
+                L"(~87 МБ, скачивается один раз).\n\nСкачать сейчас?",
+                L"Качество OCR",
+                MB_ICONQUESTION | MB_YESNO) == IDYES;
+            if (confirmed) {
+                try {
+                    offline_translator::download_ppocr_server_det();
+                } catch (const std::exception& error) {
+                    localized_message_box(
+                        settings_window,
+                        (L"Не удалось скачать модель OCR:\n" +
+                         from_utf8(error.what())).c_str(),
+                        L"Качество OCR",
+                        MB_ICONERROR | MB_OK);
+                    settings.ocr_quality = "fast";
+                }
+            } else {
+                settings.ocr_quality = "fast";
+            }
+        }
+    }
     if (g_settings_ocr_only) {
         settings.ocr_only =
             SendMessageW(g_settings_ocr_only, BM_GETCHECK, 0, 0) ==
@@ -7061,6 +7114,7 @@ void close_settings_window() {
     g_settings_excel_hotkey = nullptr;
     g_settings_excel_method = nullptr;
     g_settings_ocr_engine = nullptr;
+    g_settings_ocr_quality = nullptr;
     g_settings_ocr_only = nullptr;
     g_settings_float_button = nullptr;
     g_settings_check_update = nullptr;
@@ -7711,6 +7765,28 @@ LRESULT CALLBACK settings_proc_impl(
             450,
             470,
             54);
+        content(
+            kSettingsPageDocuments,
+            L"STATIC",
+            L"Качество PP-OCR:",
+            0,
+            290,
+            392,
+            200,
+            22);
+        g_settings_ocr_quality = content(
+            kSettingsPageDocuments,
+            L"COMBOBOX",
+            nullptr,
+            CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+            290,
+            418,
+            220,
+            160,
+            kSettingsOcrQuality);
+        fill_ocr_quality_combo(
+            g_settings_ocr_quality,
+            settings.ocr_quality);
         g_settings_ocr_only = content(
             kSettingsPageDocuments,
             L"BUTTON",
@@ -10155,12 +10231,24 @@ int WINAPI wWinMain(
         std::filesystem::path input;
         std::filesystem::path output;
         if (arguments != nullptr) {
-            for (int index = 0; index + 2 < argument_count; ++index) {
-                if (_wcsicmp(arguments[index], L"--translate-document") == 0) {
-                    input = arguments[index + 1];
-                    output = arguments[index + 2];
-                    break;
+            for (int index = 0; index < argument_count; ++index) {
+                if (_wcsicmp(arguments[index], L"--translate-document") != 0) {
+                    continue;
                 }
+                // Вход и выход — первые два аргумента после флага, которые
+                // не являются ключами (флаги могут стоять в любом месте).
+                for (int next = index + 1; next < argument_count; ++next) {
+                    if (std::wstring_view(arguments[next]).rfind(L"--", 0) == 0) {
+                        continue;
+                    }
+                    if (input.empty()) {
+                        input = arguments[next];
+                    } else {
+                        output = arguments[next];
+                        break;
+                    }
+                }
+                break;
             }
             LocalFree(arguments);
         }
@@ -10220,6 +10308,38 @@ int WINAPI wWinMain(
                         "CLI: скачиваю модель OCR " + script);
                     offline_translator::download_ppocr_script(
                         script, {}, ppocr_root);
+                }
+            }
+        }
+        // CLI: --ocr-quality fast|accurate (иначе — из настроек).
+        {
+            std::string quality = settings.ocr_quality;
+            int argument_count = 0;
+            LPWSTR* arguments =
+                CommandLineToArgvW(GetCommandLineW(), &argument_count);
+            if (arguments != nullptr) {
+                for (int index = 0; index + 1 < argument_count; ++index) {
+                    if (_wcsicmp(arguments[index], L"--ocr-quality") == 0) {
+                        quality = _wcsicmp(arguments[index + 1], L"accurate") == 0
+                            ? "accurate"
+                            : "fast";
+                        break;
+                    }
+                }
+                LocalFree(arguments);
+            }
+            offline_translator::set_ppocr_accurate(quality == "accurate");
+            if (quality == "accurate" &&
+                offline_translator::ocr_paddle_ready() &&
+                !offline_translator::ppocr_server_det_installed()) {
+                offline_translator::app_log_info(
+                    "CLI: скачиваю серверный детектор OCR");
+                try {
+                    offline_translator::download_ppocr_server_det();
+                } catch (const std::exception& error) {
+                    offline_translator::app_log_warn(
+                        std::string("CLI: не удалось скачать серверный "
+                                    "детектор OCR: ") + error.what());
                 }
             }
         }

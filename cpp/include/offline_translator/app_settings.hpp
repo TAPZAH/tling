@@ -59,6 +59,8 @@ struct AppSettings {
     int image_float_button_y{-1};
     // auto | tesseract | paddle — движок распознавания текста (OCR).
     std::string ocr_engine{"auto"};
+    // fast | accurate — быстрый детектор PP-OCR или серверный (точнее, ~87 МБ).
+    std::string ocr_quality{"fast"};
     // Только OCR: вместо перевода показывать распознанный оригинал.
     bool ocr_only{false};
 };

@@ -1,5 +1,5 @@
 // Английский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 222> kStringsEn{{
+constexpr std::array<Pair, 225> kStringsEn{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Automatically copy the selected text to the clipboard"},
     {L"Автор: ", L"Author: "},
     {L"Версия: ", L"Version: "},
@@ -221,4 +221,7 @@ constexpr std::array<Pair, 222> kStringsEn{{
     {L"Распознавание текста (OCR)", L"Text recognition (OCR)"},
     {L"Кнопка у края экрана: перетащите на неё файл, чтобы перевести.", L"A button at the screen edge: drag a file onto it to translate."},
     {L"Проверять обновления при запуске", L"Check for updates on startup"},
+    {L"Качество PP-OCR:", L"PP-OCR quality:"},
+    {L"Быстро (мобильная модель)", L"Fast (mobile model)"},
+    {L"Точно (серверный детектор, ~87 МБ)", L"Accurate (server detector, ~87 MB)"},
 }};
