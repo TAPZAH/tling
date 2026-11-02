@@ -4967,13 +4967,13 @@ offline_translator::LayoutPage ocr_raster_page(
         }
         const std::uint8_t* grid_image =
             rotation != 0 ? rotated.data() : bgra.data();
-        const auto grid_columns =
-            offline_translator::detect_vertical_grid_lines(
+        const auto grid_segments =
+            offline_translator::detect_grid_segments(
                 grid_image,
                 rotated_width,
                 rotated_height,
                 rotated_width * 4);
-        return offline_translator::build_layout_page(layout, grid_columns);
+        return offline_translator::build_layout_page(layout, grid_segments);
     };
 
     auto page = build();

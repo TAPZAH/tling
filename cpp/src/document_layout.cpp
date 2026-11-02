@@ -181,6 +181,422 @@ std::vector<int> line_columns_with_gaps(
 
 }  // анонимное пространство имён
 
+// --- линии сетки и таблицы -------------------------------------------------
+
+std::vector<GridLine> extract_grid_runs(
+    const std::uint8_t* bgra,
+    int width,
+    int height,
+    int bytes_per_line,
+    bool vertical) {
+    std::vector<GridLine> raw;
+    const int outer = vertical ? width : height;
+    const int inner = vertical ? height : width;
+    const int min_len = std::max(8, inner / 25);
+    // Фон оцениваем по светлым пикселям: линии сетки часто светло-серые или
+    // светло-оранжевые и не проходят фиксированный порог.
+    std::vector<int> samples;
+    samples.reserve(4096);
+    for (int y = 0; y < height; y += 7) {
+        const std::uint8_t* row =
+            bgra + static_cast<std::size_t>(y) * bytes_per_line;
+        for (int x = 0; x < width; x += 7) {
+            const std::uint8_t* p = row + static_cast<std::size_t>(x) * 4;
+            samples.push_back(p[0] + p[1] + p[2]);
+        }
+    }
+    std::sort(samples.begin(), samples.end());
+    const int background = samples.empty()
+        ? 765
+        : std::max(samples[samples.size() * 9 / 10], 1);
+    const int threshold = background * 95 / 100;
+    for (int o = 0; o < outer; ++o) {
+        int run_start = -1;
+        int run_end = -1;
+        int gap = 0;
+        for (int i = 0; i <= inner; ++i) {
+            bool dark = false;
+            if (i < inner) {
+                const int x = vertical ? o : i;
+                const int y = vertical ? i : o;
+                const std::uint8_t* p =
+                    bgra + static_cast<std::size_t>(y) * bytes_per_line +
+                    static_cast<std::size_t>(x) * 4;
+                dark = p[0] + p[1] + p[2] < threshold;
+            }
+            if (dark) {
+                if (run_start < 0) {
+                    run_start = i;
+                }
+                run_end = i;
+                gap = 0;
+                continue;
+            }
+            if (run_start < 0) {
+                continue;
+            }
+            ++gap;
+            if (gap > 3 || i == inner) {
+                if (run_end - run_start + 1 >= min_len) {
+                    raw.push_back(GridLine{o, run_start, run_end});
+                }
+                run_start = -1;
+                run_end = -1;
+                gap = 0;
+            }
+        }
+    }
+    std::sort(
+        raw.begin(),
+        raw.end(),
+        [](const GridLine& left, const GridLine& right) {
+            return left.pos < right.pos;
+        });
+    std::vector<GridLine> lines;
+    for (const auto& line : raw) {
+        bool merged = false;
+        for (auto it = lines.rbegin();
+             it != lines.rend() && line.pos - it->pos <= 2;
+             ++it) {
+            if (it->start <= line.end + 4 && line.start <= it->end + 4) {
+                it->start = std::min(it->start, line.start);
+                it->end = std::max(it->end, line.end);
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) {
+            lines.push_back(line);
+        }
+    }
+    return lines;
+}
+
+bool grid_lines_cross(const GridLine& vertical, const GridLine& horizontal) {
+    return vertical.pos >= horizontal.start - 2 &&
+        vertical.pos <= horizontal.end + 2 &&
+        horizontal.pos >= vertical.start - 2 &&
+        horizontal.pos <= vertical.end + 2;
+}
+
+bool has_vertical_border(
+    const std::vector<GridLine>& lines,
+    int pos,
+    int top,
+    int bottom) {
+    for (const auto& line : lines) {
+        if (std::abs(line.pos - pos) <= 2 && line.start <= bottom + 2 &&
+            line.end >= top - 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool has_horizontal_border(
+    const std::vector<GridLine>& lines,
+    int pos,
+    int left,
+    int right) {
+    for (const auto& line : lines) {
+        if (std::abs(line.pos - pos) <= 2 && line.start <= right + 2 &&
+            line.end >= left - 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int grid_find(std::vector<int>& parent, int value) {
+    while (parent[static_cast<std::size_t>(value)] != value) {
+        parent[static_cast<std::size_t>(value)] =
+            parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(value)])];
+        value = parent[static_cast<std::size_t>(value)];
+    }
+    return value;
+}
+
+struct TableFrame {
+    std::vector<int> xs;
+    std::vector<int> ys;
+    std::vector<GridLine> vertical;
+    std::vector<GridLine> horizontal;
+};
+
+std::vector<TableFrame> find_table_frames(const GridSegments& grid) {
+    const auto& v = grid.vertical;
+    const auto& h = grid.horizontal;
+    const std::size_t count = v.size() + h.size();
+    std::vector<int> parent(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        parent[i] = static_cast<int>(i);
+    }
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        for (std::size_t j = 0; j < h.size(); ++j) {
+            if (!grid_lines_cross(v[i], h[j])) {
+                continue;
+            }
+            const int a = grid_find(parent, static_cast<int>(i));
+            const int b = grid_find(
+                parent,
+                static_cast<int>(v.size() + j));
+            if (a != b) {
+                parent[static_cast<std::size_t>(b)] = a;
+            }
+        }
+    }
+    std::map<int, TableFrame> frames;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        frames[grid_find(parent, static_cast<int>(i))].vertical.push_back(v[i]);
+    }
+    for (std::size_t j = 0; j < h.size(); ++j) {
+        frames[grid_find(parent, static_cast<int>(v.size() + j))]
+            .horizontal.push_back(h[j]);
+    }
+    std::vector<TableFrame> result;
+    for (auto& [root, frame] : frames) {
+        (void)root;
+        if (frame.vertical.size() < 2 || frame.horizontal.size() < 2) {
+            continue;
+        }
+        for (const auto& line : frame.vertical) {
+            frame.xs.push_back(line.pos);
+        }
+        for (const auto& line : frame.horizontal) {
+            frame.ys.push_back(line.pos);
+        }
+        std::sort(frame.xs.begin(), frame.xs.end());
+        frame.xs.erase(
+            std::unique(
+                frame.xs.begin(),
+                frame.xs.end(),
+                [](int left, int right) { return std::abs(left - right) <= 2; }),
+            frame.xs.end());
+        std::sort(frame.ys.begin(), frame.ys.end());
+        frame.ys.erase(
+            std::unique(
+                frame.ys.begin(),
+                frame.ys.end(),
+                [](int left, int right) { return std::abs(left - right) <= 2; }),
+            frame.ys.end());
+        if (frame.xs.size() < 2 || frame.ys.size() < 2) {
+            continue;
+        }
+        result.push_back(std::move(frame));
+    }
+    return result;
+}
+
+std::wstring join_cell_words(const std::vector<const WordInfo*>& words) {
+    std::vector<const WordInfo*> sorted = words;
+    std::sort(
+        sorted.begin(),
+        sorted.end(),
+        [](const WordInfo* left, const WordInfo* right) {
+            if (left->line != right->line) {
+                return left->line < right->line;
+            }
+            return left->left < right->left;
+        });
+    std::wstring text;
+    int previous_line = -1000000;
+    for (const WordInfo* word : sorted) {
+        if (word->text.empty()) {
+            continue;
+        }
+        if (!text.empty()) {
+            text += word->line != previous_line ? L'\n' : L' ';
+        }
+        text += word->text;
+        previous_line = word->line;
+    }
+    return text;
+}
+
+std::vector<LayoutTable> build_tables_from_grid(
+    const GridSegments& grid,
+    const std::vector<WordInfo>& words) {
+    std::vector<LayoutTable> tables;
+    for (const auto& frame : find_table_frames(grid)) {
+        const int rows = static_cast<int>(frame.ys.size()) - 1;
+        const int columns = static_cast<int>(frame.xs.size()) - 1;
+        if (rows < 2 || columns < 2) {
+            continue;
+        }
+        // Слова по (строка, грубая колонка) — колонку потом уточняем интервалом.
+        std::vector<std::vector<const WordInfo*>> by_row(
+            static_cast<std::size_t>(rows));
+        std::vector<std::vector<int>> word_columns(
+            static_cast<std::size_t>(rows));
+        for (const auto& word : words) {
+            if (word.text.empty()) {
+                continue;
+            }
+            const int cx = (word.left + word.right) / 2;
+            const int cy = (word.top + word.bottom) / 2;
+            if (cx < frame.xs.front() || cx > frame.xs.back() ||
+                cy < frame.ys.front() || cy > frame.ys.back()) {
+                continue;
+            }
+            int row = static_cast<int>(
+                std::upper_bound(frame.ys.begin(), frame.ys.end(), cy) -
+                frame.ys.begin()) - 1;
+            row = std::clamp(row, 0, rows - 1);
+            by_row[static_cast<std::size_t>(row)].push_back(&word);
+            word_columns[static_cast<std::size_t>(row)].push_back(cx);
+        }
+        std::size_t word_count = 0;
+        for (const auto& row_words : by_row) {
+            word_count += row_words.size();
+        }
+        if (word_count < 4) {
+            continue;
+        }
+        // Границы ячеек в полосе строки: только там, где реально проходит
+        // вертикальный отрезок. Иначе соседние колонки — объединённая ячейка.
+        struct RowCells {
+            std::vector<int> starts;  // начало интервала (колонка)
+            std::vector<int> ends;    // конец интервала (включительно)
+            std::vector<int> spans;
+            std::vector<std::wstring> texts;
+        };
+        std::vector<RowCells> row_cells(static_cast<std::size_t>(rows));
+        for (int row = 0; row < rows; ++row) {
+            RowCells& cells = row_cells[static_cast<std::size_t>(row)];
+            int start = 0;
+            for (int boundary = 1; boundary <= columns; ++boundary) {
+                const bool active = boundary == columns ||
+                    has_vertical_border(
+                        frame.vertical,
+                        frame.xs[static_cast<std::size_t>(boundary)],
+                        frame.ys[static_cast<std::size_t>(row)],
+                        frame.ys[static_cast<std::size_t>(row + 1)]);
+                if (!active) {
+                    continue;
+                }
+                const int end = boundary - 1;
+                std::vector<const WordInfo*> cell_words;
+                for (std::size_t index = 0;
+                     index < by_row[static_cast<std::size_t>(row)].size();
+                     ++index) {
+                    const int column = static_cast<int>(
+                        std::upper_bound(
+                            frame.xs.begin(),
+                            frame.xs.end(),
+                            word_columns[static_cast<std::size_t>(row)][index]) -
+                        frame.xs.begin()) - 1;
+                    if (column >= start && column <= end) {
+                        cell_words.push_back(
+                            by_row[static_cast<std::size_t>(row)][index]);
+                    }
+                }
+                cells.starts.push_back(start);
+                cells.ends.push_back(end);
+                cells.spans.push_back(end - start + 1);
+                cells.texts.push_back(join_cell_words(cell_words));
+                start = boundary;
+            }
+        }
+        LayoutTable table;
+        table.columns = frame.xs;
+        table.rows = frame.ys;
+        for (int row = 0; row < rows; ++row) {
+            const RowCells& cells = row_cells[static_cast<std::size_t>(row)];
+            if (cells.texts.empty()) {
+                continue;
+            }
+            for (std::size_t cell_index = 0;
+                 cell_index < cells.texts.size();
+                 ++cell_index) {
+                if (cells.texts[cell_index].empty()) {
+                    continue;
+                }
+                // Вертикальное объединение: та же колонка в следующих строках
+                // без разделительной горизонтальной линии и без своего текста.
+                int row_span = 1;
+                while (row + row_span < rows) {
+                    const RowCells& below =
+                        row_cells[static_cast<std::size_t>(row + row_span)];
+                    std::size_t match = below.starts.size();
+                    for (std::size_t index = 0; index < below.starts.size();
+                         ++index) {
+                        if (below.starts[index] ==
+                                cells.starts[cell_index] &&
+                            below.ends[index] == cells.ends[cell_index]) {
+                            match = index;
+                            break;
+                        }
+                    }
+                    if (match >= below.texts.size() ||
+                        !below.texts[match].empty() ||
+                        has_horizontal_border(
+                            frame.horizontal,
+                            table.rows[static_cast<std::size_t>(row + row_span)],
+                            table.columns[static_cast<std::size_t>(
+                                cells.starts[cell_index])],
+                            table.columns[static_cast<std::size_t>(
+                                cells.ends[cell_index] + 1)])) {
+                        break;
+                    }
+                    ++row_span;
+                }
+                LayoutTableText text;
+                text.text = cells.texts[cell_index];
+                text.row = row;
+                text.column = cells.starts[cell_index];
+                text.column_span = cells.spans[cell_index];
+                text.row_span = row_span;
+                std::vector<int> heights;
+                int left = 1 << 30;
+                int top = 1 << 30;
+                int right = -1;
+                int bottom = -1;
+                for (const auto* word : by_row[static_cast<std::size_t>(row)]) {
+                    const int cx = (word->left + word->right) / 2;
+                    const int column = static_cast<int>(
+                        std::upper_bound(
+                            frame.xs.begin(), frame.xs.end(), cx) -
+                        frame.xs.begin()) - 1;
+                    if (column < cells.starts[cell_index] ||
+                        column > cells.ends[cell_index]) {
+                        continue;
+                    }
+                    heights.push_back(word->height);
+                    left = std::min(left, word->left);
+                    top = std::min(top, word->top);
+                    right = std::max(right, word->right);
+                    bottom = std::max(bottom, word->bottom);
+                }
+                text.font_height = std::max(median(heights), 1);
+                text.left = left;
+                text.top = top;
+                text.right = right;
+                text.bottom = bottom;
+                table.texts.push_back(std::move(text));
+            }
+        }
+        if (table.texts.size() >= 4) {
+            tables.push_back(std::move(table));
+        }
+    }
+    return tables;
+}
+
+bool line_inside_table(const LayoutPage& page, const LayoutLine& line) {
+    const int cx = (line.left + line.right) / 2;
+    const int cy = (line.top + line.bottom) / 2;
+    for (const auto& table : page.tables) {
+        if (table.columns.empty() || table.rows.empty()) {
+            continue;
+        }
+        if (cx >= table.columns.front() && cx <= table.columns.back() &&
+            cy >= table.rows.front() && cy <= table.rows.back()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 LayoutPage build_layout_page(
     const OcrLayout& layout,
     const std::vector<int>& forced_columns) {
@@ -483,10 +899,34 @@ std::vector<std::wstring> layout_texts(const LayoutPage& page) {
     std::vector<std::wstring> texts;
     for (const auto& block : page.blocks) {
         for (const auto& line : block.lines) {
+            if (line_inside_table(page, line)) {
+                continue;
+            }
             for (const auto& cell : line.cells) {
                 if (excel_cell_translatable(cell.text)) {
                     texts.push_back(cell.text);
                 }
+            }
+        }
+    }
+    for (const auto& table : page.tables) {
+        for (const auto& cell : table.texts) {
+            // Многострочные ячейки переводим построчно, чтобы переносы
+            // сохранились в экспорте.
+            std::size_t start = 0;
+            while (start <= cell.text.size()) {
+                const std::size_t next = cell.text.find(L'\n', start);
+                const std::wstring line = cell.text.substr(
+                    start,
+                    next == std::wstring::npos ? std::wstring::npos
+                                               : next - start);
+                if (excel_cell_translatable(line)) {
+                    texts.push_back(line);
+                }
+                if (next == std::wstring::npos) {
+                    break;
+                }
+                start = next + 1;
             }
         }
     }
@@ -502,6 +942,9 @@ void apply_layout_translations(
     std::size_t index = 0;
     for (auto& block : page->blocks) {
         for (auto& line : block.lines) {
+            if (line_inside_table(*page, line)) {
+                continue;
+            }
             for (auto& cell : line.cells) {
                 if (!excel_cell_translatable(cell.text)) {
                     continue;
@@ -513,6 +956,80 @@ void apply_layout_translations(
             }
         }
     }
+    for (auto& table : page->tables) {
+        for (auto& cell : table.texts) {
+            std::wstring rebuilt;
+            std::size_t start = 0;
+            while (start <= cell.text.size()) {
+                const std::size_t next = cell.text.find(L'\n', start);
+                const std::wstring line = cell.text.substr(
+                    start,
+                    next == std::wstring::npos ? std::wstring::npos
+                                               : next - start);
+                if (!rebuilt.empty() || start > 0) {
+                    rebuilt += L'\n';
+                }
+                if (!excel_cell_translatable(line)) {
+                    rebuilt += line;
+                } else if (index < translations.size()) {
+                    rebuilt += translations[index++];
+                } else {
+                    rebuilt += line;
+                }
+                if (next == std::wstring::npos) {
+                    break;
+                }
+                start = next + 1;
+            }
+            cell.text = std::move(rebuilt);
+        }
+    }
+}
+
+LayoutPage build_layout_page(const OcrLayout& layout, const GridSegments& grid) {
+    std::vector<int> columns;
+    columns.reserve(grid.vertical.size());
+    for (const auto& line : grid.vertical) {
+        columns.push_back(line.pos);
+    }
+    LayoutPage page = build_layout_page(layout, columns);
+    if (layout.words.empty()) {
+        return page;
+    }
+    std::vector<WordInfo> words;
+    words.reserve(layout.words.size());
+    for (const auto& box : layout.words) {
+        WordInfo info;
+        info.text = wide_text(box.text);
+        info.left = box.left;
+        info.top = box.top;
+        info.right = box.left + box.width;
+        info.bottom = box.top + box.height;
+        info.height = box.height;
+        info.block = box.block;
+        info.paragraph = box.paragraph;
+        info.line = box.line;
+        words.push_back(std::move(info));
+    }
+    page.tables = build_tables_from_grid(grid, words);
+    return page;
+}
+
+GridSegments detect_grid_segments(
+    const std::uint8_t* bgra,
+    int width,
+    int height,
+    int bytes_per_line) {
+    GridSegments grid;
+    if (bgra == nullptr || width <= 2 || height <= 2 ||
+        bytes_per_line <= 0) {
+        return grid;
+    }
+    grid.vertical =
+        extract_grid_runs(bgra, width, height, bytes_per_line, true);
+    grid.horizontal =
+        extract_grid_runs(bgra, width, height, bytes_per_line, false);
+    return grid;
 }
 
 std::vector<int> detect_vertical_grid_lines(

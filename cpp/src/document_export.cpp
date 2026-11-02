@@ -177,6 +177,11 @@ std::string content_types(const std::string& overrides) {
 
 // --- Word ---
 
+bool export_line_in_table(
+    const std::vector<LayoutTable>& tables,
+    int center_x,
+    int center_y);
+
 std::string paragraph_xml(
     const std::wstring& text,
     int font_half_points,
@@ -204,8 +209,24 @@ std::string paragraph_xml(
         out += "<w:i/>";
     }
     out += "<w:sz w:val=\"" + std::to_string(font_half_points) +
-        "\"/></w:rPr><w:t xml:space=\"preserve\">" + xml_escape(text) +
-        "</w:t></w:r></w:p>";
+        "\"/></w:rPr>";
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t next = text.find(L'\n', start);
+        const std::wstring line = text.substr(
+            start,
+            next == std::wstring::npos ? std::wstring::npos : next - start);
+        if (!line.empty()) {
+            out += "<w:t xml:space=\"preserve\">" + xml_escape(line) +
+                "</w:t>";
+        }
+        if (next == std::wstring::npos) {
+            break;
+        }
+        out += "<w:br/>";
+        start = next + 1;
+    }
+    out += "</w:r></w:p>";
     return out;
 }
 
@@ -270,6 +291,108 @@ std::string table_xml(
     return out;
 }
 
+std::string table_grid_xml(const LayoutTable& table, double scale) {
+    const int columns = static_cast<int>(table.columns.size()) - 1;
+    const int rows = static_cast<int>(table.rows.size()) - 1;
+    if (columns <= 0 || rows <= 0) {
+        return {};
+    }
+    std::vector<int> widths(static_cast<std::size_t>(columns));
+    for (int column = 0; column < columns; ++column) {
+        widths[static_cast<std::size_t>(column)] = std::max(
+            200,
+            static_cast<int>(std::lround(
+                (table.columns[static_cast<std::size_t>(column + 1)] -
+                 table.columns[static_cast<std::size_t>(column)]) *
+                scale)));
+    }
+    std::string out =
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/>"
+        "<w:tblBorders>"
+        "<w:top w:val=\"single\" w:sz=\"4\" w:color=\"808080\"/>"
+        "<w:left w:val=\"single\" w:sz=\"4\" w:color=\"808080\"/>"
+        "<w:bottom w:val=\"single\" w:sz=\"4\" w:color=\"808080\"/>"
+        "<w:right w:val=\"single\" w:sz=\"4\" w:color=\"808080\"/>"
+        "<w:insideH w:val=\"single\" w:sz=\"4\" w:color=\"808080\"/>"
+        "<w:insideV w:val=\"single\" w:sz=\"4\" w:color=\"808080\"/>"
+        "</w:tblBorders></w:tblPr><w:tblGrid>";
+    for (const int width : widths) {
+        out += "<w:gridCol w:w=\"" + std::to_string(width) + "\"/>";
+    }
+    out += "</w:tblGrid>";
+    const auto find_text = [&table](int row, int column) {
+        for (const auto& text : table.texts) {
+            if (text.row == row && text.column == column) {
+                return &text;
+            }
+        }
+        return static_cast<const LayoutTableText*>(nullptr);
+    };
+    const auto find_vertical_source = [&table](int row, int column) {
+        for (const auto& text : table.texts) {
+            if (text.column == column && text.row < row &&
+                text.row + text.row_span > row) {
+                return &text;
+            }
+        }
+        return static_cast<const LayoutTableText*>(nullptr);
+    };
+    for (int row = 0; row < rows; ++row) {
+        out += "<w:tr>";
+        int column = 0;
+        while (column < columns) {
+            const LayoutTableText* text = find_text(row, column);
+            const LayoutTableText* continued = text != nullptr
+                ? nullptr
+                : find_vertical_source(row, column);
+            const int span = std::max(
+                1,
+                text != nullptr
+                    ? text->column_span
+                    : (continued != nullptr ? continued->column_span : 1));
+            int width = 0;
+            for (int c = column;
+                 c < column + span && c < columns;
+                 ++c) {
+                width += widths[static_cast<std::size_t>(c)];
+            }
+            std::string cell = "<w:tcPr><w:tcW w:w=\"" +
+                std::to_string(width) + "\" w:type=\"dxa\"/>";
+            if (span > 1) {
+                cell += "<w:gridSpan w:val=\"" + std::to_string(span) +
+                    "\"/>";
+            }
+            if (text != nullptr && text->row_span > 1) {
+                cell += "<w:vMerge w:val=\"restart\"/>";
+            } else if (continued != nullptr) {
+                cell += "<w:vMerge/>";
+            }
+            cell += "</w:tcPr>";
+            std::string paragraph = "<w:p/>";
+            if (text != nullptr) {
+                const int font_half_points = std::clamp(
+                    static_cast<int>(std::lround(
+                        text->font_height * scale / 10.0)),
+                    16,
+                    44);
+                paragraph = paragraph_xml(
+                    text->text,
+                    font_half_points,
+                    0,
+                    nullptr,
+                    0,
+                    text->bold,
+                    text->italic);
+            }
+            out += "<w:tc>" + cell + paragraph + "</w:tc>";
+            column += span;
+        }
+        out += "</w:tr>";
+    }
+    out += "</w:tbl>";
+    return out;
+}
+
 std::string build_docx_body(
     const LayoutPage& page,
     double scale,
@@ -277,8 +400,18 @@ std::string build_docx_body(
     int content_width,
     int image_width) {
     std::string body;
+    int first_table_top = 1 << 30;
+    for (const auto& table : page.tables) {
+        if (!table.rows.empty()) {
+            first_table_top = std::min(first_table_top, table.rows.front());
+        }
+    }
+    const auto emit_blocks = [&](bool above_table) {
     int previous_bottom = -1;
     for (const auto& block : page.blocks) {
+        if ((block.top < first_table_top) != above_table) {
+            continue;
+        }
         int font_half_points = 22;
         if (!block.lines.empty()) {
             const int line_height = std::max(block.lines.front().font_height, 1);
@@ -287,7 +420,7 @@ std::string build_docx_body(
                 18,
                 44);
         }
-        if (block.table) {
+        if (block.table && page.tables.empty()) {
             std::vector<int> widths;
             const std::size_t columns = block.lines.empty()
                 ? 0
@@ -310,6 +443,12 @@ std::string build_docx_body(
             continue;
         }
         for (const auto& line : block.lines) {
+            if (export_line_in_table(
+                    page.tables,
+                    (line.left + line.right) / 2,
+                    (line.top + line.bottom) / 2)) {
+                continue;
+            }
             const LayoutCell cell = line.cells.empty()
                 ? LayoutCell{}
                 : line.cells.front();
@@ -349,6 +488,12 @@ std::string build_docx_body(
             previous_bottom = line.bottom;
         }
     }
+    };
+    emit_blocks(true);
+    for (const auto& table : page.tables) {
+        body += table_grid_xml(table, scale);
+    }
+    emit_blocks(false);
     return body;
 }
 
@@ -413,7 +558,7 @@ void export_docx(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
         "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
         "<w:docDefaults><w:rPrDefault><w:rPr>"
-        "<w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:cs=\"Calibri\"/>"
+        "<w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"Microsoft YaHei\" w:cs=\"Calibri\"/>"
         "<w:sz w:val=\"22\"/></w:rPr></w:rPrDefault></w:docDefaults>"
         "</w:styles>";
     const std::string rels =
@@ -451,52 +596,212 @@ std::string column_name(int index) {
     return name;
 }
 
+bool numeric_cell_text(const std::wstring& text) {
+    if (text.empty()) {
+        return false;
+    }
+    std::size_t index = 0;
+    if (text[0] == L'-' || text[0] == L'+') {
+        ++index;
+    }
+    bool digit = false;
+    bool dot = false;
+    for (; index < text.size(); ++index) {
+        const wchar_t symbol = text[index];
+        if (symbol >= L'0' && symbol <= L'9') {
+            digit = true;
+            continue;
+        }
+        if (symbol == L'.' && !dot) {
+            dot = true;
+            continue;
+        }
+        return false;
+    }
+    if (!digit) {
+        return false;
+    }
+    const std::size_t start = text[0] == L'-' || text[0] == L'+' ? 1 : 0;
+    // Ведущие нули (ИНН, коды) — только текстом.
+    if (start + 1 < text.size() && text[start] == L'0' &&
+        text[start + 1] != L'.') {
+        return false;
+    }
+    return true;
+}
+
+std::string ascii_number(const std::wstring& text) {
+    std::string value;
+    value.reserve(text.size());
+    for (const wchar_t symbol : text) {
+        if (symbol >= L'0' && symbol <= L'9') {
+            value.push_back(static_cast<char>(symbol));
+        } else if (symbol == L'-') {
+            value.push_back('-');
+        } else if (symbol == L'.') {
+            value.push_back('.');
+        }
+    }
+    return value;
+}
+
+std::string xlsx_cell(
+    const std::string& reference,
+    const std::wstring& text,
+    int style) {
+    if (numeric_cell_text(text)) {
+        return "<c r=\"" + reference + "\" s=\"" + std::to_string(style) +
+            "\"><v>" + ascii_number(text) + "</v></c>";
+    }
+    return "<c r=\"" + reference + "\" t=\"inlineStr\" s=\"" +
+        std::to_string(style) + "\"><is><t xml:space=\"preserve\">" +
+        xml_escape(text) + "</t></is></c>";
+}
+
+bool export_line_in_table(
+    const std::vector<LayoutTable>& tables,
+    int center_x,
+    int center_y) {
+    for (const auto& table : tables) {
+        if (table.columns.empty() || table.rows.empty()) {
+            continue;
+        }
+        if (center_x >= table.columns.front() &&
+            center_x <= table.columns.back() &&
+            center_y >= table.rows.front() &&
+            center_y <= table.rows.back()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void export_xlsx(
     const std::vector<LayoutPage>& pages,
     const std::filesystem::path& path) {
     std::string rows_xml;
-    std::vector<int> column_widths;
-    int row = 1;
+    std::string merges_xml;
+    int merge_count = 0;
+    std::vector<double> column_widths;
+    int next_row = 1;
+    const auto ensure_column = [&](std::size_t index, double width) {
+        if (column_widths.size() <= index) {
+            column_widths.resize(index + 1, 8.0);
+        }
+        column_widths[index] = std::max(column_widths[index], width);
+    };
     for (const auto& page : pages) {
-        for (const auto& block : page.blocks) {
-            for (const auto& line : block.lines) {
-                rows_xml += "<row r=\"" + std::to_string(row) + "\">";
-                const std::size_t cells =
-                    line.cells.empty() ? 1 : line.cells.size();
-                for (std::size_t column = 0; column < cells; ++column) {
-                    const std::wstring text = line.cells.empty()
-                        ? std::wstring{}
-                        : line.cells[column].text;
-                    if (column_widths.size() <= column) {
-                        column_widths.resize(column + 1, 0);
-                    }
-                    column_widths[column] = std::max(
-                        column_widths[column],
-                        static_cast<int>(text.size()));
-                    const std::string reference =
-                        column_name(static_cast<int>(column)) +
-                        std::to_string(row);
-                    rows_xml += "<c r=\"" + reference +
-                        "\" t=\"inlineStr\" s=\"1\"><is><t xml:space=\"preserve\">" +
-                        xml_escape(text) + "</t></is></c>";
-                }
-                rows_xml += "</row>";
-                ++row;
+        int first_table_top = 1 << 30;
+        for (const auto& table : page.tables) {
+            if (!table.rows.empty()) {
+                first_table_top = std::min(first_table_top, table.rows.front());
             }
         }
+        const auto emit_blocks = [&](bool above_table) {
+            for (const auto& block : page.blocks) {
+                for (const auto& line : block.lines) {
+                    if (export_line_in_table(
+                            page.tables,
+                            (line.left + line.right) / 2,
+                            (line.top + line.bottom) / 2)) {
+                        continue;
+                    }
+                    if ((line.top < first_table_top) != above_table) {
+                        continue;
+                    }
+                    rows_xml += "<row r=\"" + std::to_string(next_row) + "\">";
+                    const std::size_t cells =
+                        line.cells.empty() ? 1 : line.cells.size();
+                    for (std::size_t column = 0; column < cells; ++column) {
+                        const std::wstring text = line.cells.empty()
+                            ? std::wstring{}
+                            : line.cells[column].text;
+                        ensure_column(
+                            column,
+                            std::clamp(
+                                static_cast<double>(text.size()) * 1.1 + 2.0,
+                                8.0,
+                                90.0));
+                        const std::string reference =
+                            column_name(static_cast<int>(column)) +
+                            std::to_string(next_row);
+                        rows_xml += xlsx_cell(reference, text, 1);
+                    }
+                    rows_xml += "</row>";
+                    ++next_row;
+                }
+            }
+        };
+        emit_blocks(true);
+        for (const auto& table : page.tables) {
+            if (table.texts.empty() || table.columns.size() < 2 ||
+                table.rows.size() < 2) {
+                continue;
+            }
+            const int columns = static_cast<int>(table.columns.size()) - 1;
+            const int table_rows = static_cast<int>(table.rows.size()) - 1;
+            for (int column = 0; column < columns; ++column) {
+                const double pixels = static_cast<double>(
+                    table.columns[static_cast<std::size_t>(column + 1)] -
+                    table.columns[static_cast<std::size_t>(column)]);
+                ensure_column(
+                    static_cast<std::size_t>(column),
+                    std::clamp(pixels / 7.0, 8.0, 120.0));
+            }
+            for (int row = 0; row < table_rows; ++row) {
+                const int excel_row = next_row + row;
+                const int height = std::clamp(
+                    static_cast<int>(std::lround(
+                        (table.rows[static_cast<std::size_t>(row + 1)] -
+                         table.rows[static_cast<std::size_t>(row)]) *
+                        0.75)),
+                    12,
+                    300);
+                std::string row_cells;
+                std::vector<const LayoutTableText*> row_texts;
+                for (const auto& text : table.texts) {
+                    if (text.row == row) {
+                        row_texts.push_back(&text);
+                    }
+                }
+                std::sort(
+                    row_texts.begin(),
+                    row_texts.end(),
+                    [](const LayoutTableText* left, const LayoutTableText* right) {
+                        return left->column < right->column;
+                    });
+                for (const LayoutTableText* text : row_texts) {
+                    const std::string reference =
+                        column_name(text->column) + std::to_string(excel_row);
+                    row_cells += xlsx_cell(reference, text->text, 2);
+                    if (text->column_span > 1 || text->row_span > 1) {
+                        const std::string last =
+                            column_name(text->column + text->column_span - 1) +
+                            std::to_string(excel_row + text->row_span - 1);
+                        merges_xml += "<mergeCell ref=\"" + reference + ":" +
+                            last + "\"/>";
+                        ++merge_count;
+                    }
+                }
+                if (row_cells.empty()) {
+                    continue;
+                }
+                rows_xml += "<row r=\"" + std::to_string(excel_row) +
+                    "\" ht=\"" + std::to_string(height) +
+                    "\" customHeight=\"1\">" + row_cells + "</row>";
+            }
+            next_row += table_rows + 1;
+        }
+        emit_blocks(false);
         if (!pages.empty()) {
-            ++row;  // пустая строка между страницами
+            ++next_row;  // пустая строка между страницами
         }
     }
     std::string cols_xml;
     for (std::size_t index = 0; index < column_widths.size(); ++index) {
-        const double width = std::clamp(
-            column_widths[index] * 1.1 + 2.0,
-            8.0,
-            90.0);
         cols_xml += "<col min=\"" + std::to_string(index + 1) +
             "\" max=\"" + std::to_string(index + 1) + "\" width=\"" +
-            std::to_string(width).substr(0, 5) +
+            std::to_string(column_widths[index]).substr(0, 5) +
             "\" customWidth=\"1\"/>";
     }
     const std::string sheet =
@@ -505,7 +810,12 @@ void export_xlsx(
         "<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews>" +
         (cols_xml.empty() ? std::string{}
                           : "<cols>" + cols_xml + "</cols>") +
-        "<sheetData>" + rows_xml + "</sheetData></worksheet>";
+        "<sheetData>" + rows_xml + "</sheetData>" +
+        (merge_count > 0
+             ? "<mergeCells count=\"" + std::to_string(merge_count) + "\">" +
+                 merges_xml + "</mergeCells>"
+             : std::string{}) +
+        "</worksheet>";
     const std::string workbook =
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
         "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
@@ -517,9 +827,16 @@ void export_xlsx(
         "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
         "<fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>"
         "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>"
-        "<borders count=\"1\"><border/></borders>"
+        "<borders count=\"2\"><border/>"
+        "<border><left style=\"thin\"><color rgb=\"FF808080\"/></left>"
+        "<right style=\"thin\"><color rgb=\"FF808080\"/></right>"
+        "<top style=\"thin\"><color rgb=\"FF808080\"/></top>"
+        "<bottom style=\"thin\"><color rgb=\"FF808080\"/></bottom>"
+        "<diagonal/></border></borders>"
         "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>"
-        "<cellXfs count=\"2\"><xf xfId=\"0\"/><xf xfId=\"0\" applyAlignment=\"1\">"
+        "<cellXfs count=\"3\"><xf xfId=\"0\"/><xf xfId=\"0\" applyAlignment=\"1\">"
+        "<alignment wrapText=\"1\" vertical=\"top\"/></xf>"
+        "<xf xfId=\"0\" applyAlignment=\"1\" applyBorder=\"1\" borderId=\"1\">"
         "<alignment wrapText=\"1\" vertical=\"top\"/></xf></cellXfs>"
         "</styleSheet>";
     const std::string rels =

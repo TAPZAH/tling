@@ -200,6 +200,28 @@ bool excel_cell_translatable(std::wstring_view cell) {
     if (trimmed.empty()) {
         return false;
     }
+    // Машинные строки (пароли ЭЦП, коды проверки, серийники): букв мало
+    // относительно цифр/символов — переводить бессмысленно.
+    {
+        std::size_t letters = 0;
+        std::size_t meaningful = 0;
+        for (const wchar_t symbol : trimmed) {
+            if (symbol == L' ' || symbol == L'\t') {
+                continue;
+            }
+            ++meaningful;
+            const bool latin = (symbol >= L'A' && symbol <= L'Z') ||
+                (symbol >= L'a' && symbol <= L'z');
+            const bool cyrillic = symbol >= 0x0400 && symbol <= 0x04FF;
+            const bool cjk = symbol >= 0x4E00 && symbol <= 0x9FFF;
+            if (latin || cyrillic || cjk) {
+                ++letters;
+            }
+        }
+        if (meaningful >= 6 && letters * 2 < meaningful) {
+            return false;
+        }
+    }
     // Суммы с кодом валюты («35.000,00 TL», «3.750,00 €») не переводим —
     // как в Google: числа и валюта остаются как есть.
     {
