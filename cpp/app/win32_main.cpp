@@ -5115,6 +5115,11 @@ bool process_document(
                                 raster_width,
                                 raster_height);
                         }
+                        if (config.output_png) {
+                            // PNG-оверлей рисуется по блокам: с таблицами
+                            // слова внутри таблицы остались бы непереведёнными.
+                            page.tables.clear();
+                        }
                         page_text_counts.push_back(
                             offline_translator::layout_texts(page).size());
                         pages.push_back(std::move(page));
@@ -5144,6 +5149,10 @@ bool process_document(
                     offline_translator::OcrEngine ocr;
                     ocr.initialize_multi(config.ocr_languages);
                     auto page = ocr_raster_page(ocr, config, image, width, height);
+                    if (config.output_png) {
+                        // См. выше: PNG рисуется по блокам.
+                        page.tables.clear();
+                    }
                     page_text_counts.push_back(
                         offline_translator::layout_texts(page).size());
                     if (config.output_png) {

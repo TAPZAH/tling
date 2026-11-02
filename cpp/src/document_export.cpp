@@ -297,6 +297,9 @@ std::string table_grid_xml(const LayoutTable& table, double scale) {
     if (columns <= 0 || rows <= 0) {
         return {};
     }
+    const auto clamp_span = [columns](int column, int span) {
+        return std::clamp(span, 1, columns - column);
+    };
     std::vector<int> widths(static_cast<std::size_t>(columns));
     for (int column = 0; column < columns; ++column) {
         widths[static_cast<std::size_t>(column)] = std::max(
@@ -345,8 +348,8 @@ std::string table_grid_xml(const LayoutTable& table, double scale) {
             const LayoutTableText* continued = text != nullptr
                 ? nullptr
                 : find_vertical_source(row, column);
-            const int span = std::max(
-                1,
+            const int span = clamp_span(
+                column,
                 text != nullptr
                     ? text->column_span
                     : (continued != nullptr ? continued->column_span : 1));
@@ -497,6 +500,23 @@ std::string build_docx_body(
     return body;
 }
 
+// Word не открывает документ, где таблица идёт сразу за таблицей или
+// стоит последним элементом body: после каждой таблицы обязателен абзац.
+void ensure_paragraphs_after_tables(std::string* body) {
+    const std::string adjacent = "</w:tbl><w:tbl>";
+    for (std::size_t at = body->find(adjacent);
+         at != std::string::npos;
+         at = body->find(adjacent, at + adjacent.size() + 6)) {
+        body->insert(at + 8, "<w:p/>");
+    }
+    const std::string closing = "</w:tbl>";
+    if (body->size() >= closing.size() &&
+        body->compare(body->size() - closing.size(), closing.size(), closing) ==
+            0) {
+        *body += "<w:p/>";
+    }
+}
+
 void export_docx(
     const std::vector<LayoutPage>& pages,
     const std::filesystem::path& path) {
@@ -542,6 +562,7 @@ void export_docx(
                 image_width);
         }
     }
+    ensure_paragraphs_after_tables(&body);
     const std::string section =
         "<w:sectPr><w:pgSz w:w=\"" + std::to_string(page_width_twips) +
         "\" w:h=\"" + std::to_string(static_cast<int>(page_height_twips)) +
