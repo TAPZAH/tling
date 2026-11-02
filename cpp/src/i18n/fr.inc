@@ -1,5 +1,5 @@
 // Французский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 208> kStringsFr{{
+constexpr std::array<Pair, 222> kStringsFr{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copier automatiquement le texte s\u00e9lectionn\u00e9 dans le presse-papiers"},
     {L"Автор: ", L"Auteur : "},
     {L"Версия: ", L"Version : "},
@@ -207,4 +207,18 @@ constexpr std::array<Pair, 208> kStringsFr{{
     {L"Перевожу документ…", L"Traduction du document\u2026"},
     {L"Не удалось открыть PDF", L"Impossible d'ouvrir le PDF"},
     {L"Текст не найден", L"Aucun texte trouv\u00e9"},
+    {L"История", L"Historique"},
+    {L"Автокопирование", L"Copie automatique"},
+    {L"Турбо перевод", L"Traduction turbo"},
+    {L"Плавающая кнопка", L"Bouton flottant"},
+    {L"Только OCR", L"OCR uniquement"},
+    {L"Настройки…", L"Param\u00e8tres\u2026"},
+    {L"Область экрана…", L"Zone d'\u00e9cran\u2026"},
+    {L"Ячейки Word/Excel", L"Cellules Word/Excel"},
+    {L"Документы", L"Documents"},
+    {L"Интерфейс", L"Interface"},
+    {L"Файлы", L"Fichiers"},
+    {L"Распознавание текста (OCR)", L"Reconnaissance de texte (OCR)"},
+    {L"Кнопка у края экрана: перетащите на неё файл, чтобы перевести.", L"Un bouton en bord d'\u00e9cran : d\u00e9posez-y un fichier pour le traduire."},
+    {L"Проверять обновления при запуске", L"V\u00e9rifier les mises \u00e0 jour au d\u00e9marrage"},
 }};

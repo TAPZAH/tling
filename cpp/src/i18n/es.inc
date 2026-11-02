@@ -1,5 +1,5 @@
 // Испанский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 208> kStringsEs{{
+constexpr std::array<Pair, 222> kStringsEs{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copiar autom\u00e1ticamente el texto seleccionado al portapapeles"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Versi\u00f3n: "},
@@ -207,4 +207,18 @@ constexpr std::array<Pair, 208> kStringsEs{{
     {L"Перевожу документ…", L"Traduciendo el documento\u2026"},
     {L"Не удалось открыть PDF", L"No se pudo abrir el PDF"},
     {L"Текст не найден", L"No se encontr\u00f3 texto"},
+    {L"История", L"Historial"},
+    {L"Автокопирование", L"Copiado autom\u00e1tico"},
+    {L"Турбо перевод", L"Traducci\u00f3n turbo"},
+    {L"Плавающая кнопка", L"Bot\u00f3n flotante"},
+    {L"Только OCR", L"Solo OCR"},
+    {L"Настройки…", L"Configuraci\u00f3n\u2026"},
+    {L"Область экрана…", L"\u00c1rea de pantalla\u2026"},
+    {L"Ячейки Word/Excel", L"Celdas de Word/Excel"},
+    {L"Документы", L"Documentos"},
+    {L"Интерфейс", L"Interfaz"},
+    {L"Файлы", L"Archivos"},
+    {L"Распознавание текста (OCR)", L"Reconocimiento de texto (OCR)"},
+    {L"Кнопка у края экрана: перетащите на неё файл, чтобы перевести.", L"Un bot\u00f3n en el borde de la pantalla: arrastre un archivo para traducirlo."},
+    {L"Проверять обновления при запуске", L"Buscar actualizaciones al iniciar"},
 }};

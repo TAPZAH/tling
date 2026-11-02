@@ -118,10 +118,10 @@ constexpr int kSettingsHistoryLimit = 1214;
 constexpr int kSettingsCheckUpdate = 1215;
 constexpr int kSettingsInstallUpdate = 1216;
 constexpr int kSettingsOpenReleases = 1217;
-constexpr int kSettingsNavLanguages = 1218;
+constexpr int kSettingsNavTranslate = 1218;
 constexpr int kSettingsNavBehavior = 1219;
-constexpr int kSettingsNavThemes = 1220;
-constexpr int kSettingsNavLanguage = 1221;
+constexpr int kSettingsNavDocuments = 1220;
+constexpr int kSettingsNavInterface = 1221;
 constexpr int kSettingsNavAbout = 1222;
 constexpr int kSettingsPackagesButton = 1226;
 constexpr int kSettingsEngineCombo = 1227;
@@ -134,6 +134,7 @@ constexpr int kSettingsExcelHotkey = 1233;
 constexpr int kSettingsExcelMethod = 1234;
 constexpr int kSettingsOcrEngine = 1236;
 constexpr int kSettingsOcrOnly = 1237;
+constexpr int kSettingsFloatButton = 1238;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kResultReplaceButton = 1304;
@@ -146,7 +147,6 @@ constexpr int kImageButton = 1012;
 constexpr int kScreenOcrHotkey = 2002;
 constexpr int kExcelHotkey = 2003;
 constexpr int kTrayOpen = 3001;
-constexpr int kTrayAutostart = 3002;
 constexpr int kTrayExit = 3003;
 constexpr int kTrayCheckUpdate = 3004;
 constexpr int kTrayAutoCopy = 3005;
@@ -156,6 +156,8 @@ constexpr int kTrayImageFile = 3008;
 constexpr int kTrayImageRegion = 3009;
 constexpr int kTrayFloatButton = 3010;
 constexpr int kTrayOcrOnly = 3011;
+constexpr int kTraySettings = 3012;
+constexpr int kTrayTranslateRoot = 3013;
 constexpr int kTrayHistoryRoot = 3097;
 constexpr int kTrayHistoryEmpty = 3098;
 constexpr int kTrayHistoryClear = 3099;
@@ -163,7 +165,6 @@ constexpr int kTrayHistoryFirst = 3100;
 constexpr int kTrayHistoryLast = 3149;
 constexpr int kTrayHistoryTranslateFirst = 3200;
 constexpr int kTrayHistoryTranslateLast = 3249;
-constexpr int kTrayHistoryPreviewFirst = 3300;
 constexpr int kDefaultWindowWidth = 780;
 constexpr int kDefaultWindowHeight = 450;
 constexpr int kMinWindowWidth = 750;
@@ -222,6 +223,7 @@ HWND g_settings_excel_hotkey = nullptr;
 HWND g_settings_excel_method = nullptr;
 HWND g_settings_ocr_engine = nullptr;
 HWND g_settings_ocr_only = nullptr;
+HWND g_settings_float_button = nullptr;
 bool g_ocr_only_session = false;
 std::wstring g_hotkey_capture_backup;
 std::atomic<bool> g_update_busy{false};
@@ -2785,28 +2787,30 @@ const wchar_t* tray_menu_label(UINT id) {
     switch (id) {
         case kTrayOpen:
             return L"Открыть";
-        case kTrayAutostart:
-            return L"Запускать вместе с Windows";
+        case kTraySettings:
+            return L"Настройки…";
         case kTrayAutoCopy:
-            return L"Автоматически копировать выделенный текст в буфер обмена";
+            return L"Автокопирование";
         case kTrayTurbo:
-            return L"Турбо перевод: сразу переводить выделенный текст";
+            return L"Турбо перевод";
         case kTrayCheckUpdate:
             return L"Проверить обновления";
         case kTrayScreenOcr:
-            return L"Перевод области экрана";
+            return L"Область экрана…";
         case kTrayImageFile:
-            return L"Перевести изображение…";
+            return L"Изображение…";
         case kTrayImageRegion:
-            return L"Перевод ячеек Word/Excel";
+            return L"Ячейки Word/Excel";
         case kTrayFloatButton:
-            return L"Плавающая кнопка (перетащите файл)";
+            return L"Плавающая кнопка";
         case kTrayOcrOnly:
-            return L"Только OCR (без перевода, до перезапуска)";
+            return L"Только OCR";
         case kTrayExit:
             return L"Выход";
+        case kTrayTranslateRoot:
+            return L"Перевод";
         case kTrayHistoryRoot:
-            return L"История копирований";
+            return L"История";
         case kTrayHistoryEmpty:
             return L"Пока пусто";
         case kTrayHistoryClear:
@@ -2815,16 +2819,236 @@ const wchar_t* tray_menu_label(UINT id) {
             break;
     }
     if (id >= kTrayHistoryFirst && id <= kTrayHistoryLast) {
-        return L"Копировать";
+        const std::size_t index =
+            static_cast<std::size_t>(id - kTrayHistoryFirst);
+        if (index < g_tray_history_labels.size()) {
+            return g_tray_history_labels[index].c_str();
+        }
+        return L"";
     }
     if (id >= kTrayHistoryTranslateFirst && id <= kTrayHistoryTranslateLast) {
         return L"Перевести";
     }
-    if (id >= kTrayHistoryPreviewFirst &&
-        id < kTrayHistoryPreviewFirst + g_tray_history_labels.size()) {
-        return g_tray_history_labels[id - kTrayHistoryPreviewFirst].c_str();
-    }
     return L"";
+}
+
+// Подсказка справа (горячая клавиша) для пунктов меню трея.
+const wchar_t* tray_menu_hint(UINT id) {
+    switch (id) {
+        case kTrayScreenOcr:
+            return L"Ctrl+Shift+S";
+        case kTrayImageRegion: {
+            static std::wstring excel_hint;
+            const std::string spec = g_runtime
+                ? g_runtime->settings.excel_hotkey
+                : std::string(offline_translator::kDefaultExcelHotkey);
+            excel_hint = from_utf8(spec);
+            return excel_hint.c_str();
+        }
+        default:
+            return L"";
+    }
+}
+
+bool tray_menu_has_submenu(UINT id) {
+    return id == kTrayTranslateRoot || id == kTrayHistoryRoot ||
+        (id >= kTrayHistoryFirst && id <= kTrayHistoryLast);
+}
+
+// ===== Отрисовка меню трея: иконки, подсказки, шевроны =====
+
+COLORREF blend_colors(COLORREF front, COLORREF back, double weight) {
+    const int r = static_cast<int>(
+        GetRValue(front) * weight + GetRValue(back) * (1.0 - weight));
+    const int g = static_cast<int>(
+        GetGValue(front) * weight + GetGValue(back) * (1.0 - weight));
+    const int b = static_cast<int>(
+        GetBValue(front) * weight + GetBValue(back) * (1.0 - weight));
+    return RGB(r, g, b);
+}
+
+HFONT menu_item_font(bool bold) {
+    static HFONT normal = nullptr;
+    static HFONT semibold = nullptr;
+    if (!normal) {
+        HDC screen = GetDC(nullptr);
+        const int height = -MulDiv(9, GetDeviceCaps(screen, LOGPIXELSY), 72);
+        ReleaseDC(nullptr, screen);
+        normal = CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            FW_NORMAL,
+            FALSE,
+            FALSE,
+            FALSE,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH,
+            L"Segoe UI");
+        semibold = CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            FW_SEMIBOLD,
+            FALSE,
+            FALSE,
+            FALSE,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH,
+            L"Segoe UI");
+    }
+    return bold ? semibold : normal;
+}
+
+// Монохромная иконка 16×16 для пункта меню трея.
+void draw_tray_glyph(HDC dc, const RECT& box, UINT id, COLORREF color) {
+    const int x = box.left;
+    const int y = box.top;
+    HPEN pen = CreatePen(PS_SOLID, 1, color);
+    HGDIOBJ old_pen = SelectObject(dc, pen);
+    HGDIOBJ old_brush =
+        SelectObject(dc, GetStockObject(NULL_BRUSH));
+    const auto line = [&](int x1, int y1, int x2, int y2) {
+        MoveToEx(dc, x + x1, y + y1, nullptr);
+        LineTo(dc, x + x2, y + y2);
+    };
+    const auto rect16 = [&](int left, int top, int right, int bottom) {
+        Rectangle(dc, x + left, y + top, x + right + 1, y + bottom + 1);
+    };
+    const auto dot = [&](int cx, int cy) {
+        HBRUSH fill = CreateSolidBrush(color);
+        HGDIOBJ previous = SelectObject(dc, fill);
+        HPEN null_pen = CreatePen(PS_SOLID, 1, color);
+        HGDIOBJ previous_pen = SelectObject(dc, null_pen);
+        Ellipse(dc, x + cx - 1, y + cy - 1, x + cx + 2, y + cy + 2);
+        SelectObject(dc, previous_pen);
+        DeleteObject(null_pen);
+        SelectObject(dc, previous);
+        DeleteObject(fill);
+    };
+    if (id == kTrayOpen) {
+        rect16(2, 3, 13, 13);
+        line(2, 7, 13, 7);
+    } else if (id == kTrayScreenOcr) {
+        line(2, 6, 2, 2);
+        line(2, 2, 6, 2);
+        line(10, 2, 14, 2);
+        line(14, 2, 14, 6);
+        line(2, 10, 2, 14);
+        line(2, 14, 6, 14);
+        line(10, 14, 14, 14);
+        line(14, 14, 14, 10);
+    } else if (id == kTrayImageFile) {
+        rect16(2, 3, 13, 13);
+        MoveToEx(dc, x + 3, y + 11, nullptr);
+        LineTo(dc, x + 7, y + 6);
+        LineTo(dc, x + 10, y + 9);
+        LineTo(dc, x + 13, y + 7);
+        dot(11, 5);
+    } else if (id == kTrayImageRegion) {
+        rect16(2, 3, 13, 13);
+        line(8, 3, 8, 13);
+        line(2, 8, 13, 8);
+    } else if (id >= kTrayHistoryTranslateFirst &&
+               id <= kTrayHistoryTranslateLast) {
+        line(3, 8, 12, 8);
+        line(8, 4, 12, 8);
+        line(12, 8, 8, 12);
+    } else if (id == kTrayTranslateRoot) {
+        SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Ellipse(dc, x + 2, y + 2, x + 14, y + 14);
+        line(8, 2, 8, 14);
+        line(2, 8, 14, 8);
+    } else if (id == kTrayHistoryRoot ||
+               (id >= kTrayHistoryFirst && id <= kTrayHistoryLast)) {
+        SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Ellipse(dc, x + 2, y + 2, x + 14, y + 14);
+        line(8, 8, 8, 4);
+        line(8, 8, 11, 10);
+    } else if (id == kTrayHistoryClear) {
+        line(3, 5, 13, 5);
+        line(6, 5, 6, 3);
+        line(10, 5, 10, 3);
+        line(6, 3, 10, 3);
+        line(4, 5, 5, 13);
+        line(12, 5, 11, 13);
+        line(5, 13, 11, 13);
+        line(7, 7, 7, 11);
+        line(9, 7, 9, 11);
+    } else if (id == kTrayTurbo) {
+        MoveToEx(dc, x + 9, y + 2, nullptr);
+        LineTo(dc, x + 5, y + 8);
+        LineTo(dc, x + 8, y + 8);
+        LineTo(dc, x + 7, y + 14);
+    } else if (id == kTrayAutoCopy) {
+        rect16(2, 2, 9, 10);
+        rect16(5, 5, 13, 13);
+    } else if (id == kTrayFloatButton) {
+        POINT arrow[] = {
+            {x + 4, y + 1},
+            {x + 4, y + 13},
+            {x + 7, y + 10},
+            {x + 9, y + 14},
+            {x + 11, y + 13},
+            {x + 9, y + 9},
+            {x + 13, y + 9},
+        };
+        HBRUSH fill = CreateSolidBrush(color);
+        HGDIOBJ previous = SelectObject(dc, fill);
+        HPEN null_pen = CreatePen(PS_SOLID, 1, color);
+        HGDIOBJ previous_pen = SelectObject(dc, null_pen);
+        Polygon(dc, arrow, 7);
+        SelectObject(dc, previous_pen);
+        DeleteObject(null_pen);
+        SelectObject(dc, previous);
+        DeleteObject(fill);
+    } else if (id == kTrayOcrOnly) {
+        rect16(3, 2, 12, 14);
+        line(5, 6, 10, 6);
+        line(5, 8, 10, 8);
+        line(5, 10, 9, 10);
+    } else if (id == kTraySettings) {
+        line(3, 4, 13, 4);
+        line(3, 8, 13, 8);
+        line(3, 12, 13, 12);
+        dot(9, 4);
+        dot(6, 8);
+        dot(10, 12);
+    } else if (id == kTrayCheckUpdate) {
+        SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Arc(dc, x + 2, y + 2, x + 14, y + 14, x + 12, y + 5, x + 5, y + 3);
+        line(8, 2, 12, 3);
+        line(8, 2, 9, 5);
+    } else if (id == kTrayExit) {
+        rect16(2, 3, 8, 13);
+        line(6, 8, 13, 8);
+        line(10, 5, 13, 8);
+        line(13, 8, 10, 11);
+    }
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    DeleteObject(pen);
+}
+
+// Шеврон «▸» для пунктов с подменю.
+void draw_submenu_chevron(HDC dc, const RECT& item, COLORREF color) {
+    const int center_y = (item.top + item.bottom) / 2;
+    const int tip_x = item.right - 12;
+    HPEN pen = CreatePen(PS_SOLID, 1, color);
+    HGDIOBJ old_pen = SelectObject(dc, pen);
+    MoveToEx(dc, tip_x - 3, center_y - 4, nullptr);
+    LineTo(dc, tip_x + 1, center_y);
+    LineTo(dc, tip_x - 3, center_y + 4);
+    SelectObject(dc, old_pen);
+    DeleteObject(pen);
 }
 
 void show_tray_menu(HWND window) {
@@ -2832,11 +3056,39 @@ void show_tray_menu(HWND window) {
     if (!menu) {
         return;
     }
-    AppendMenuW(
+    auto append_item = [](HMENU target, UINT id, UINT flags = MF_OWNERDRAW) {
+        AppendMenuW(
+            target,
+            flags,
+            id,
+            reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(id)));
+    };
+    auto apply_background = [](HMENU target) {
+        MENUINFO info{};
+        info.cbSize = sizeof(info);
+        info.fMask = MIM_BACKGROUND;
+        info.hbrBack = theme_background_brush();
+        SetMenuInfo(target, &info);
+    };
+    // Группа 1: действия.
+    append_item(menu, kTrayOpen);
+    HMENU translate_menu = CreatePopupMenu();
+    append_item(translate_menu, kTrayScreenOcr);
+    append_item(translate_menu, kTrayImageFile);
+    append_item(translate_menu, kTrayImageRegion);
+    apply_background(translate_menu);
+    MENUITEMINFOW translate_item{};
+    translate_item.cbSize = sizeof(translate_item);
+    translate_item.fMask = MIIM_FTYPE | MIIM_SUBMENU | MIIM_ID | MIIM_DATA;
+    translate_item.fType = MFT_OWNERDRAW;
+    translate_item.wID = kTrayTranslateRoot;
+    translate_item.hSubMenu = translate_menu;
+    translate_item.dwItemData = kTrayTranslateRoot;
+    InsertMenuItemW(
         menu,
-        MF_OWNERDRAW,
-        kTrayOpen,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayOpen)));
+        GetMenuItemCount(menu),
+        TRUE,
+        &translate_item);
     HMENU history_menu = CreatePopupMenu();
     g_tray_history_popup = history_menu;
     g_tray_history_items.clear();
@@ -2854,11 +3106,10 @@ void show_tray_menu(HWND window) {
         history.resize(static_cast<std::size_t>(history_limit));
     }
     if (history.empty()) {
-        AppendMenuW(
+        append_item(
             history_menu,
-            MF_OWNERDRAW | MF_GRAYED,
             kTrayHistoryEmpty,
-            reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayHistoryEmpty)));
+            MF_OWNERDRAW | MF_GRAYED);
     } else {
         const int shown = std::min(
             static_cast<int>(history.size()),
@@ -2869,26 +3120,19 @@ void show_tray_menu(HWND window) {
             g_tray_history_labels.push_back(
                 from_utf8(offline_translator::clipboard_history_preview(
                     history[static_cast<std::size_t>(index)])));
+            // Клик по превью копирует запись, подменю — только «Перевести».
             HMENU item_menu = CreatePopupMenu();
-            AppendMenuW(
+            append_item(
                 item_menu,
-                MF_OWNERDRAW,
-                kTrayHistoryFirst + index,
-                reinterpret_cast<LPCWSTR>(
-                    static_cast<UINT_PTR>(kTrayHistoryFirst + index)));
-            AppendMenuW(
-                item_menu,
-                MF_OWNERDRAW,
-                kTrayHistoryTranslateFirst + index,
-                reinterpret_cast<LPCWSTR>(
-                    static_cast<UINT_PTR>(kTrayHistoryTranslateFirst + index)));
+                kTrayHistoryTranslateFirst + index);
+            apply_background(item_menu);
             MENUITEMINFOW item_info{};
             item_info.cbSize = sizeof(item_info);
             item_info.fMask = MIIM_FTYPE | MIIM_SUBMENU | MIIM_ID | MIIM_DATA;
             item_info.fType = MFT_OWNERDRAW;
-            item_info.wID = kTrayHistoryPreviewFirst + index;
+            item_info.wID = kTrayHistoryFirst + index;
             item_info.hSubMenu = item_menu;
-            item_info.dwItemData = kTrayHistoryPreviewFirst + index;
+            item_info.dwItemData = kTrayHistoryFirst + index;
             InsertMenuItemW(
                 history_menu,
                 GetMenuItemCount(history_menu),
@@ -2896,12 +3140,11 @@ void show_tray_menu(HWND window) {
                 &item_info);
         }
         AppendMenuW(history_menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(
+        append_item(
             history_menu,
-            MF_OWNERDRAW,
-            kTrayHistoryClear,
-            reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayHistoryClear)));
+            kTrayHistoryClear);
     }
+    apply_background(history_menu);
     MENUITEMINFOW history_item{};
     history_item.cbSize = sizeof(history_item);
     history_item.fMask = MIIM_FTYPE | MIIM_SUBMENU | MIIM_ID | MIIM_DATA;
@@ -2910,22 +3153,8 @@ void show_tray_menu(HWND window) {
     history_item.hSubMenu = history_menu;
     history_item.dwItemData = kTrayHistoryRoot;
     InsertMenuItemW(menu, GetMenuItemCount(menu), TRUE, &history_item);
-    UINT autocopy_flags = MF_OWNERDRAW;
-    {
-        bool autocopy = false;
-        try {
-            autocopy = g_runtime && g_runtime->settings.auto_copy_selection;
-        } catch (const std::exception&) {
-        }
-        if (autocopy) {
-            autocopy_flags |= MF_CHECKED;
-        }
-    }
-    AppendMenuW(
-        menu,
-        autocopy_flags,
-        kTrayAutoCopy,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayAutoCopy)));
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // Группа 2: переключатели.
     UINT turbo_flags = MF_OWNERDRAW;
     {
         bool turbo = false;
@@ -2937,61 +3166,37 @@ void show_tray_menu(HWND window) {
             turbo_flags |= MF_CHECKED;
         }
     }
-    AppendMenuW(
-        menu,
-        turbo_flags,
-        kTrayTurbo,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayTurbo)));
-    AppendMenuW(
-        menu,
-        MF_OWNERDRAW,
-        kTrayCheckUpdate,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayCheckUpdate)));
-    AppendMenuW(
-        menu,
-        MF_OWNERDRAW,
-        kTrayScreenOcr,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayScreenOcr)));
-    AppendMenuW(
-        menu,
-        MF_OWNERDRAW,
-        kTrayImageFile,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayImageFile)));
-    AppendMenuW(
-        menu,
-        MF_OWNERDRAW,
-        kTrayImageRegion,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayImageRegion)));
+    append_item(menu, kTrayTurbo, turbo_flags);
+    UINT autocopy_flags = MF_OWNERDRAW;
+    {
+        bool autocopy = false;
+        try {
+            autocopy = g_runtime && g_runtime->settings.auto_copy_selection;
+        } catch (const std::exception&) {
+        }
+        if (autocopy) {
+            autocopy_flags |= MF_CHECKED;
+        }
+    }
+    append_item(menu, kTrayAutoCopy, autocopy_flags);
     UINT float_flags = MF_OWNERDRAW;
     if (g_runtime && g_runtime->settings.image_float_button) {
         float_flags |= MF_CHECKED;
     }
-    AppendMenuW(
-        menu,
-        float_flags,
-        kTrayFloatButton,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayFloatButton)));
+    append_item(menu, kTrayFloatButton, float_flags);
     UINT ocr_only_flags = MF_OWNERDRAW;
     if (g_ocr_only_session ||
         (g_runtime && g_runtime->settings.ocr_only)) {
         ocr_only_flags |= MF_CHECKED;
     }
-    AppendMenuW(
-        menu,
-        ocr_only_flags,
-        kTrayOcrOnly,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayOcrOnly)));
-    AppendMenuW(
-        menu,
-        MF_OWNERDRAW,
-        kTrayExit,
-        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayExit)));
+    append_item(menu, kTrayOcrOnly, ocr_only_flags);
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // Группа 3: служебное.
+    append_item(menu, kTraySettings);
+    append_item(menu, kTrayCheckUpdate);
+    append_item(menu, kTrayExit);
     SetMenuDefaultItem(menu, kTrayOpen, FALSE);
-    MENUINFO menu_info{};
-    menu_info.cbSize = sizeof(menu_info);
-    menu_info.fMask = MIM_BACKGROUND;
-    menu_info.hbrBack = theme_background_brush();
-    SetMenuInfo(menu, &menu_info);
+    apply_background(menu);
     POINT cursor{};
     GetCursorPos(&cursor);
     SetForegroundWindow(window);
@@ -5739,10 +5944,10 @@ constexpr int kSettingsNavTop = 16;
 constexpr int kSettingsNavHeight = 46;
 constexpr int kSettingsNavGap = 18;
 constexpr wchar_t kSettingsPageProperty[] = L"ot_page";
-constexpr int kSettingsPageLanguages = 0;
+constexpr int kSettingsPageTranslate = 0;
 constexpr int kSettingsPageBehavior = 1;
-constexpr int kSettingsPageThemes = 2;
-constexpr int kSettingsPageLanguage = 3;
+constexpr int kSettingsPageDocuments = 2;
+constexpr int kSettingsPageInterface = 3;
 constexpr int kSettingsPageAbout = 4;
 
 constexpr int kSettingsScrollLine = 28;
@@ -6740,6 +6945,11 @@ void apply_settings_dialog(HWND settings_window) {
             SendMessageW(g_settings_ocr_only, BM_GETCHECK, 0, 0) ==
             BST_CHECKED;
     }
+    if (g_settings_float_button) {
+        settings.image_float_button =
+            SendMessageW(g_settings_float_button, BM_GETCHECK, 0, 0) ==
+            BST_CHECKED;
+    }
     settings.ui_theme =
         g_settings_theme_dark &&
         SendMessageW(g_settings_theme_dark, BM_GETCHECK, 0, 0) == BST_CHECKED
@@ -6798,6 +7008,7 @@ void apply_settings_dialog(HWND settings_window) {
             }
         }
         store_runtime_settings(settings);
+        show_float_button(settings.image_float_button, false);
         apply_ocr_backend_from_settings(settings);
         refresh_tray_icon();
         apply_live_theme();
@@ -6851,6 +7062,7 @@ void close_settings_window() {
     g_settings_excel_method = nullptr;
     g_settings_ocr_engine = nullptr;
     g_settings_ocr_only = nullptr;
+    g_settings_float_button = nullptr;
     g_settings_check_update = nullptr;
     g_settings_install_update = nullptr;
     g_settings_open_releases = nullptr;
@@ -6975,10 +7187,10 @@ LRESULT CALLBACK settings_proc_impl(
         };
         // ===== Сайдбар =====
         const wchar_t* nav_titles[5] = {
-            L"Языки",
+            L"Перевод",
             L"Поведение",
-            L"Темы",
-            L"Язык интерфейса",
+            L"Документы",
+            L"Интерфейс",
             L"О программе"};
         for (int index = 0; index < 5; ++index) {
             g_settings_nav[index] = CreateWindowW(
@@ -6991,7 +7203,7 @@ LRESULT CALLBACK settings_proc_impl(
                 kSettingsNavHeight,
                 window,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(
-                    kSettingsNavLanguages + index)),
+                    kSettingsNavTranslate + index)),
                 nullptr,
                 nullptr);
             SetWindowSubclass(
@@ -7000,9 +7212,9 @@ LRESULT CALLBACK settings_proc_impl(
                 1,
                 0);
         }
-        // ===== Страница «Языки» =====
+        // ===== Страница «Перевод» =====
         HWND languages_title = content(
-            kSettingsPageLanguages,
+            kSettingsPageTranslate,
             L"STATIC",
             L"Движок перевода",
             0,
@@ -7016,7 +7228,7 @@ LRESULT CALLBACK settings_proc_impl(
             reinterpret_cast<WPARAM>(settings_section_font()),
             TRUE);
         g_settings_engine_combo = content(
-            kSettingsPageLanguages,
+            kSettingsPageTranslate,
             L"COMBOBOX",
             nullptr,
             CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
@@ -7058,7 +7270,7 @@ LRESULT CALLBACK settings_proc_impl(
                     settings.engine)),
             0);
         content(
-            kSettingsPageLanguages,
+            kSettingsPageTranslate,
             L"STATIC",
             L"Установка и удаление языковых моделей — в окне «Пакеты».",
             0,
@@ -7067,7 +7279,7 @@ LRESULT CALLBACK settings_proc_impl(
             340,
             36);
         content(
-            kSettingsPageLanguages,
+            kSettingsPageTranslate,
             L"BUTTON",
             L"Пакеты моделей…",
             BS_OWNERDRAW | WS_TABSTOP,
@@ -7079,7 +7291,7 @@ LRESULT CALLBACK settings_proc_impl(
         // Онлайн-перевод: движок Google работает через интернет, поэтому
         // ключ API (необязательный) указывается здесь.
         HWND online_title = content(
-            kSettingsPageLanguages,
+            kSettingsPageTranslate,
             L"STATIC",
             L"Онлайн-перевод (Google)",
             0,
@@ -7093,7 +7305,7 @@ LRESULT CALLBACK settings_proc_impl(
             reinterpret_cast<WPARAM>(settings_section_font()),
             TRUE);
         content(
-            kSettingsPageLanguages,
+            kSettingsPageTranslate,
             L"STATIC",
             L"Ключ Google (необязательно, для надёжности):",
             0,
@@ -7102,7 +7314,7 @@ LRESULT CALLBACK settings_proc_impl(
             340,
             18);
         g_settings_google_key = content(
-            kSettingsPageLanguages,
+            kSettingsPageTranslate,
             L"EDIT",
             from_utf8(settings.google_api_key).c_str(),
             WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
@@ -7112,7 +7324,7 @@ LRESULT CALLBACK settings_proc_impl(
             24,
             kSettingsGoogleKey);
         content(
-            kSettingsPageLanguages,
+            kSettingsPageTranslate,
             L"STATIC",
             L"Ключ хранится в settings.json и передаётся только сервису "
             L"Google. Без ключа перевод идёт через бесплатные эндпоинты, "
@@ -7333,48 +7545,52 @@ LRESULT CALLBACK settings_proc_impl(
             48,
             24,
             kSettingsHistoryLimit);
-        HWND launch_title = content(
-            kSettingsPageBehavior,
+        // ===== Страница «Документы» =====
+        HWND files_title = content(
+            kSettingsPageDocuments,
             L"STATIC",
-            L"Запуск",
+            L"Файлы",
             0,
             16,
-            636,
-            200,
+            16,
+            300,
             26);
         SendMessageW(
-            launch_title,
+            files_title,
             WM_SETFONT,
             reinterpret_cast<WPARAM>(settings_section_font()),
             TRUE);
-        g_settings_autostart = content(
-            kSettingsPageBehavior,
+        g_settings_float_button = content(
+            kSettingsPageDocuments,
             L"BUTTON",
-            L"Запускать вместе с Windows",
+            L"Плавающая кнопка (перетащите файл)",
             BS_AUTOCHECKBOX | WS_TABSTOP,
             16,
-            666,
-            400,
+            48,
+            470,
             24,
-            kSettingsAutostart);
-        bool autostart = false;
-        try {
-            autostart = offline_translator::is_app_autostart_enabled();
-        } catch (const std::exception&) {
-        }
+            kSettingsFloatButton);
         SendMessageW(
-            g_settings_autostart,
+            g_settings_float_button,
             BM_SETCHECK,
-            autostart ? BST_CHECKED : BST_UNCHECKED,
+            settings.image_float_button ? BST_CHECKED : BST_UNCHECKED,
             0);
-        // ===== Excel: перевод выделенных ячеек =====
+        content(
+            kSettingsPageDocuments,
+            L"STATIC",
+            L"Кнопка у края экрана: перетащите на неё файл, чтобы перевести.",
+            0,
+            36,
+            76,
+            440,
+            36);
         HWND excel_title = content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"STATIC",
             L"Excel: перевод выделенных ячеек",
             0,
             16,
-            706,
+            128,
             470,
             26);
         SendMessageW(
@@ -7383,12 +7599,12 @@ LRESULT CALLBACK settings_proc_impl(
             reinterpret_cast<WPARAM>(settings_section_font()),
             TRUE);
         g_settings_excel_enabled = content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"BUTTON",
             L"Переводить выделенные ячейки Excel",
             BS_AUTOCHECKBOX | WS_TABSTOP,
             16,
-            736,
+            160,
             470,
             24,
             kSettingsExcelEnabled);
@@ -7398,21 +7614,21 @@ LRESULT CALLBACK settings_proc_impl(
             settings.excel_translation ? BST_CHECKED : BST_UNCHECKED,
             0);
         content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"STATIC",
             L"Горячая клавиша Excel:",
             0,
             16,
-            764,
+            192,
             300,
             18);
         g_settings_excel_hotkey = content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"EDIT",
             from_utf8(settings.excel_hotkey).c_str(),
             WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
             16,
-            786,
+            214,
             240,
             24,
             kSettingsExcelHotkey);
@@ -7422,30 +7638,30 @@ LRESULT CALLBACK settings_proc_impl(
             1,
             0);
         content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"STATIC",
             L"Нажмите комбинацию в поле «Горячая клавиша Excel», чтобы задать свою.",
             0,
             264,
-            788,
+            216,
             222,
             36);
         content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"STATIC",
             L"Способ записи в Excel:",
             0,
             16,
-            876,
+            262,
             300,
             18);
         g_settings_excel_method = content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"COMBOBOX",
             nullptr,
             CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
             16,
-            898,
+            284,
             260,
             160,
             kSettingsExcelMethod);
@@ -7453,50 +7669,55 @@ LRESULT CALLBACK settings_proc_impl(
             g_settings_excel_method,
             settings.excel_write_method);
         content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"STATIC",
             L"Перевод добавляется к каждой выделенной ячейке через разделитель «Добавить к оригиналу». «Буфер обмена»: Excel должен быть в фокусе. «COM»: запись напрямую в открытый Excel, формулы не трогаются.",
             0,
             16,
-            930,
+            316,
             470,
             54);
-        content(
-            kSettingsPageBehavior,
+        HWND ocr_title = content(
+            kSettingsPageDocuments,
             L"STATIC",
-            L"Движок распознавания текста (OCR):",
+            L"Распознавание текста (OCR)",
             0,
             16,
-            996,
+            386,
             300,
-            18);
+            26);
+        SendMessageW(
+            ocr_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
         g_settings_ocr_engine = content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"COMBOBOX",
             nullptr,
             CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
             16,
-            1018,
+            418,
             260,
             160,
             kSettingsOcrEngine);
         fill_ocr_engine_combo(g_settings_ocr_engine, settings.ocr_engine);
         content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"STATIC",
             L"«Автоматически»: PaddleOCR (точнее на фото и сканах), иначе Tesseract. PaddleOCR работает при наличии моделей PP-OCR.",
             0,
             16,
-            1050,
+            450,
             470,
             54);
         g_settings_ocr_only = content(
-            kSettingsPageBehavior,
+            kSettingsPageDocuments,
             L"BUTTON",
             L"Только OCR всегда (распознавать область экрана без перевода)",
             BS_AUTOCHECKBOX | WS_TABSTOP,
             16,
-            1108,
+            516,
             470,
             24,
             kSettingsOcrOnly);
@@ -7505,9 +7726,9 @@ LRESULT CALLBACK settings_proc_impl(
             BM_SETCHECK,
             settings.ocr_only ? BST_CHECKED : BST_UNCHECKED,
             0);
-        // ===== Страница «Темы» =====
+        // ===== Страница «Интерфейс» =====
         HWND themes_title = content(
-            kSettingsPageThemes,
+            kSettingsPageInterface,
             L"STATIC",
             L"Тема оформления",
             0,
@@ -7521,7 +7742,7 @@ LRESULT CALLBACK settings_proc_impl(
             reinterpret_cast<WPARAM>(settings_section_font()),
             TRUE);
         g_settings_theme_light = content(
-            kSettingsPageThemes,
+            kSettingsPageInterface,
             L"BUTTON",
             L"Светлая",
             BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
@@ -7531,7 +7752,7 @@ LRESULT CALLBACK settings_proc_impl(
             22,
             kSettingsThemeLight);
         g_settings_theme_dark = content(
-            kSettingsPageThemes,
+            kSettingsPageInterface,
             L"BUTTON",
             L"Тёмная",
             BS_AUTORADIOBUTTON | WS_TABSTOP,
@@ -7554,7 +7775,7 @@ LRESULT CALLBACK settings_proc_impl(
             dark_theme ? BST_CHECKED : BST_UNCHECKED,
             0);
         content(
-            kSettingsPageThemes,
+            kSettingsPageInterface,
             L"STATIC",
             L"Тема применяется к главному окну, настройкам и кнопке у курсора.",
             0,
@@ -7563,12 +7784,12 @@ LRESULT CALLBACK settings_proc_impl(
             440,
             36);
         HWND language_title = content(
-            kSettingsPageLanguage,
+            kSettingsPageInterface,
             L"STATIC",
             L"Язык интерфейса",
             0,
             16,
-            16,
+            160,
             300,
             24);
         SendMessageW(
@@ -7577,22 +7798,22 @@ LRESULT CALLBACK settings_proc_impl(
             reinterpret_cast<WPARAM>(settings_section_font()),
             TRUE);
         g_settings_ui_language = content(
-            kSettingsPageLanguage,
+            kSettingsPageInterface,
             L"COMBOBOX",
             nullptr,
             CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
             16,
-            52,
+            192,
             240,
             220,
             kSettingsUiLanguage);
         content(
-            kSettingsPageLanguage,
+            kSettingsPageInterface,
             L"STATIC",
             L"Язык определяется по языку системы. Изменение применяется сразу.",
             0,
             16,
-            96,
+            232,
             440,
             36);
         SendMessageW(
@@ -7620,6 +7841,57 @@ LRESULT CALLBACK settings_proc_impl(
                 g_settings_ui_language,
                 CB_SETCURSEL,
                 selected_language,
+                0);
+        }
+        HWND launch_title = content(
+            kSettingsPageInterface,
+            L"STATIC",
+            L"Запуск",
+            0,
+            16,
+            284,
+            200,
+            26);
+        SendMessageW(
+            launch_title,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(settings_section_font()),
+            TRUE);
+        g_settings_autostart = content(
+            kSettingsPageInterface,
+            L"BUTTON",
+            L"Запускать вместе с Windows",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            314,
+            400,
+            24,
+            kSettingsAutostart);
+        bool autostart = false;
+        try {
+            autostart = offline_translator::is_app_autostart_enabled();
+        } catch (const std::exception&) {
+        }
+        SendMessageW(
+            g_settings_autostart,
+            BM_SETCHECK,
+            autostart ? BST_CHECKED : BST_UNCHECKED,
+            0);
+        g_settings_check_updates_startup = content(
+            kSettingsPageInterface,
+            L"BUTTON",
+            L"Проверять обновления при запуске",
+            BS_AUTOCHECKBOX | WS_TABSTOP,
+            16,
+            342,
+            320,
+            24,
+            kSettingsCheckUpdatesStartup);
+        if (settings.check_updates_on_startup) {
+            SendMessageW(
+                g_settings_check_updates_startup,
+                BM_SETCHECK,
+                BST_CHECKED,
                 0);
         }
         // ===== Страница «О программе» =====
@@ -7715,23 +7987,6 @@ LRESULT CALLBACK settings_proc_impl(
             160,
             28,
             kSettingsOpenReleases);
-        g_settings_check_updates_startup = content(
-            kSettingsPageAbout,
-            L"BUTTON",
-            L"Проверять обновления при запуске",
-            BS_AUTOCHECKBOX | WS_TABSTOP,
-            16,
-            274,
-            320,
-            24,
-            kSettingsCheckUpdatesStartup);
-        if (settings.check_updates_on_startup) {
-            SendMessageW(
-                g_settings_check_updates_startup,
-                BM_SETCHECK,
-                BST_CHECKED,
-                0);
-        }
         // ===== Кнопки фиксированной нижней панели =====
         g_settings_save = CreateWindowW(
             L"BUTTON",
@@ -7893,8 +8148,8 @@ LRESULT CALLBACK settings_proc_impl(
     if (message == WM_COMMAND) {
         const int id = LOWORD(w_param);
         const int notification = HIWORD(w_param);
-        if (id >= kSettingsNavLanguages && id <= kSettingsNavAbout) {
-            settings_show_page(window, id - kSettingsNavLanguages);
+        if (id >= kSettingsNavTranslate && id <= kSettingsNavAbout) {
+            settings_show_page(window, id - kSettingsNavTranslate);
             return 0;
         }
         if (id == kSettingsPackagesButton) {
@@ -8801,8 +9056,8 @@ LRESULT CALLBACK window_proc(
         if (message == WM_MEASUREITEM) {
             auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(l_param);
             if (measure && measure->CtlType == ODT_MENU) {
-                measure->itemWidth = 240;
-                measure->itemHeight = 26;
+                measure->itemWidth = 264;
+                measure->itemHeight = 28;
                 return TRUE;
             }
             if (measure && measure->CtlType == ODT_COMBOBOX) {
@@ -8852,22 +9107,28 @@ LRESULT CALLBACK window_proc(
             if (draw && draw->CtlType == ODT_MENU) {
                 const UiTheme theme = current_ui_theme();
                 const bool selected = (draw->itemState & ODS_SELECTED) != 0;
+                const bool checked = (draw->itemState & ODS_CHECKED) != 0;
+                const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
+                const bool is_default =
+                    (draw->itemState & ODS_DEFAULT) != 0;
                 HBRUSH brush = CreateSolidBrush(
                     selected ? theme.button_hover : theme.background);
                 FillRect(draw->hDC, &draw->rcItem, brush);
                 DeleteObject(brush);
                 SetBkMode(draw->hDC, TRANSPARENT);
-                SetTextColor(draw->hDC, theme.text);
-                RECT text_bounds = draw->rcItem;
-                text_bounds.left += 24;
-                if (draw->itemState & ODS_CHECKED) {
+                const COLORREF text_color = disabled
+                    ? blend_colors(theme.text, theme.background, 0.45)
+                    : theme.text;
+                SetTextColor(draw->hDC, text_color);
+                const UINT item_id = static_cast<UINT>(draw->itemID);
+                const int center =
+                    draw->rcItem.top +
+                    (draw->rcItem.bottom - draw->rcItem.top) / 2;
+                if (checked) {
                     // Галочку рисуем линиями: символ «✓» зависит от шрифта
                     // и часто подменяется на «?».
-                    const int center =
-                        draw->rcItem.top +
-                        (draw->rcItem.bottom - draw->rcItem.top) / 2;
-                    const int left = draw->rcItem.left + 7;
-                    HPEN pen = CreatePen(PS_SOLID, 2, theme.text);
+                    const int left = draw->rcItem.left + 8;
+                    HPEN pen = CreatePen(PS_SOLID, 2, text_color);
                     HGDIOBJ old_pen = SelectObject(draw->hDC, pen);
                     MoveToEx(draw->hDC, left, center, nullptr);
                     LineTo(draw->hDC, left + 4, center + 5);
@@ -8875,14 +9136,54 @@ LRESULT CALLBACK window_proc(
                     SelectObject(draw->hDC, old_pen);
                     DeleteObject(pen);
                 }
+                RECT icon_box{
+                    draw->rcItem.left + 28,
+                    center - 8,
+                    draw->rcItem.left + 44,
+                    center + 8};
+                draw_tray_glyph(draw->hDC, icon_box, item_id, text_color);
+                const wchar_t* hint = tray_menu_hint(item_id);
+                RECT text_bounds = draw->rcItem;
+                text_bounds.left += 52;
+                text_bounds.right -= 24;
+                if (hint[0]) {
+                    text_bounds.right -= 92;
+                }
+                HGDIOBJ old_font = SelectObject(
+                    draw->hDC,
+                    menu_item_font(is_default));
                 const std::wstring tray_label = offline_translator::tr(
-                    tray_menu_label(static_cast<UINT>(draw->itemID)));
+                    tray_menu_label(item_id));
                 DrawTextW(
                     draw->hDC,
                     tray_label.c_str(),
                     -1,
                     &text_bounds,
-                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX |
+                        DT_END_ELLIPSIS);
+                if (hint[0]) {
+                    RECT hint_bounds = draw->rcItem;
+                    hint_bounds.left = hint_bounds.right - 112;
+                    hint_bounds.right -=
+                        tray_menu_has_submenu(item_id) ? 28 : 16;
+                    SetTextColor(
+                        draw->hDC,
+                        blend_colors(theme.text, theme.background, 0.55));
+                    DrawTextW(
+                        draw->hDC,
+                        hint,
+                        -1,
+                        &hint_bounds,
+                        DT_RIGHT | DT_VCENTER | DT_SINGLELINE |
+                            DT_NOPREFIX);
+                }
+                if (tray_menu_has_submenu(item_id)) {
+                    draw_submenu_chevron(
+                        draw->hDC,
+                        draw->rcItem,
+                        blend_colors(theme.text, theme.background, 0.7));
+                }
+                SelectObject(draw->hDC, old_font);
                 return TRUE;
             }
         }
@@ -8920,6 +9221,10 @@ LRESULT CALLBACK window_proc(
         }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayOpen) {
             restore_from_tray(window);
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(w_param) == kTraySettings) {
+            open_settings_window(window, window_instance(window));
             return 0;
         }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayExit) {

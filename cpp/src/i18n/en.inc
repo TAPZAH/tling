@@ -1,5 +1,5 @@
 // Английский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 208> kStringsEn{{
+constexpr std::array<Pair, 222> kStringsEn{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Automatically copy the selected text to the clipboard"},
     {L"Автор: ", L"Author: "},
     {L"Версия: ", L"Version: "},
@@ -207,4 +207,18 @@ constexpr std::array<Pair, 208> kStringsEn{{
     {L"Перевожу документ…", L"Translating document…"},
     {L"Не удалось открыть PDF", L"Failed to open the PDF"},
     {L"Текст не найден", L"No text found"},
+    {L"История", L"History"},
+    {L"Автокопирование", L"Auto-copy"},
+    {L"Турбо перевод", L"Turbo translation"},
+    {L"Плавающая кнопка", L"Floating button"},
+    {L"Только OCR", L"OCR only"},
+    {L"Настройки…", L"Settings\u2026"},
+    {L"Область экрана…", L"Screen area\u2026"},
+    {L"Ячейки Word/Excel", L"Word/Excel cells"},
+    {L"Документы", L"Documents"},
+    {L"Интерфейс", L"Interface"},
+    {L"Файлы", L"Files"},
+    {L"Распознавание текста (OCR)", L"Text recognition (OCR)"},
+    {L"Кнопка у края экрана: перетащите на неё файл, чтобы перевести.", L"A button at the screen edge: drag a file onto it to translate."},
+    {L"Проверять обновления при запуске", L"Check for updates on startup"},
 }};

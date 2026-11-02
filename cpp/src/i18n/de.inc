@@ -1,5 +1,5 @@
 // Немецкий словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 208> kStringsDe{{
+constexpr std::array<Pair, 222> kStringsDe{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Ausgew\u00e4hlten Text automatisch in die Zwischenablage kopieren"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Version: "},
@@ -207,4 +207,18 @@ constexpr std::array<Pair, 208> kStringsDe{{
     {L"Перевожу документ…", L"Dokument wird \u00fcbersetzt\u2026"},
     {L"Не удалось открыть PDF", L"PDF konnte nicht ge\u00f6ffnet werden"},
     {L"Текст не найден", L"Kein Text gefunden"},
+    {L"История", L"Verlauf"},
+    {L"Автокопирование", L"Auto-Kopieren"},
+    {L"Турбо перевод", L"Turbo-\u00dcbersetzung"},
+    {L"Плавающая кнопка", L"Schwebende Schaltfl\u00e4che"},
+    {L"Только OCR", L"Nur OCR"},
+    {L"Настройки…", L"Einstellungen\u2026"},
+    {L"Область экрана…", L"Bildschirmbereich\u2026"},
+    {L"Ячейки Word/Excel", L"Word/Excel-Zellen"},
+    {L"Документы", L"Dokumente"},
+    {L"Интерфейс", L"Oberfl\u00e4che"},
+    {L"Файлы", L"Dateien"},
+    {L"Распознавание текста (OCR)", L"Texterkennung (OCR)"},
+    {L"Кнопка у края экрана: перетащите на неё файл, чтобы перевести.", L"Schaltfl\u00e4che am Bildschirmrand: Datei darauf ziehen, um sie zu \u00fcbersetzen."},
+    {L"Проверять обновления при запуске", L"Beim Start nach Updates suchen"},
 }};
