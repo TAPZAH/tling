@@ -1,5 +1,7 @@
 #include "offline_translator/paddle_ocr.hpp"
 
+#include "file_transfer.hpp"
+
 #include "onnxruntime_c_api.h"
 
 #include <algorithm>
@@ -93,6 +95,7 @@ std::string ppocr_script_for_language(std::string_view code) {
         {"sw", "latin"}, {"tl", "latin"}, {"ca", "latin"}, {"gl", "latin"},
         {"eu", "latin"}, {"cy", "latin"}, {"ga", "latin"}, {"is", "latin"},
         {"ru", "eslav"}, {"uk", "eslav"}, {"be", "eslav"}, {"bg", "eslav"},
+        {"zh", "chinese"}, {"zt", "chinese"}, {"ja", "chinese"},
     };
     const auto it = kMap.find(std::string(code));
     if (it == kMap.end()) {
@@ -148,6 +151,33 @@ bool ppocr_script_installed(
     const auto dict = dir / ("dict_" + std::string(script) + ".txt");
     return std::filesystem::exists(base, ec) &&
         std::filesystem::exists(dict, ec);
+}
+
+void download_ppocr_script(
+    std::string_view script,
+    const ProgressCallback& progress,
+    const std::filesystem::path& root) {
+    if (script.empty()) {
+        throw std::runtime_error("ppocr: не задан скрипт распознавателя");
+    }
+    const auto dir = root.empty() ? default_ppocr_root() : root;
+    if (dir.empty()) {
+        throw std::runtime_error("ppocr: не найден каталог моделей");
+    }
+    std::filesystem::create_directories(dir);
+    const std::string base =
+        "https://huggingface.co/monkt/paddleocr-onnx/resolve/main/languages/" +
+        std::string(script);
+    download_resumable(
+        {base + "/rec.onnx"},
+        dir / ("rec_" + std::string(script) + ".onnx"),
+        progress,
+        "Модель OCR «" + std::string(script) + "»");
+    download_resumable(
+        {base + "/dict.txt"},
+        dir / ("dict_" + std::string(script) + ".txt"),
+        progress,
+        "Словарь OCR «" + std::string(script) + "»");
 }
 
 namespace {
@@ -497,7 +527,9 @@ int find_root(std::vector<int>& parent, int a) {
 std::vector<Box> detect_boxes(
     Session& det_session,
     const Rgb& rgb,
-    int limit_side_len) {
+    int limit_side_len,
+    double threshold = 0.3,
+    double box_threshold = 0.55) {
     const int h = rgb.height;
     const int w = rgb.width;
     if (h <= 0 || w <= 0) {
@@ -526,8 +558,8 @@ std::vector<Box> detect_boxes(
     const int map_h = static_cast<int>(out_shape[2]);
     const int map_w = static_cast<int>(out_shape[3]);
 
-    constexpr double kThreshold = 0.3;
-    constexpr double kBoxThreshold = 0.55;
+    const double kThreshold = threshold;
+    const double kBoxThreshold = box_threshold;
     constexpr double kUnclip = 1.5;
     std::vector<std::uint8_t> mask(
         static_cast<std::size_t>(map_h) * map_w, 0);
@@ -643,6 +675,203 @@ std::vector<Box> detect_boxes(
 
 // --- распознавание строк ---------------------------------------------------
 
+// Широкий бокс может оказаться склейкой нескольких полей (шапка документа и
+// номер справа: детектор сливает области одной высоты). Разбиваем такой бокс
+// по широким вертикальным промежуткам без текста.
+std::vector<Box> split_wide_boxes(const Rgb& rgb, const std::vector<Box>& boxes) {
+    std::vector<Box> out;
+    out.reserve(boxes.size());
+    for (const Box& box : boxes) {
+        const int bw = box.right - box.left + 1;
+        const int bh = box.bottom - box.top + 1;
+        if (bw < 3 * bh || bw < 40 || bh < 6) {
+            out.push_back(box);
+            continue;
+        }
+        std::vector<int> lums;
+        lums.reserve(512);
+        for (int y = box.top; y <= box.bottom; y += 2) {
+            for (int x = box.left; x <= box.right; x += 2) {
+                const std::uint8_t* p = rgb.pixels.data() +
+                    (static_cast<std::size_t>(y) * rgb.width + x) * 3;
+                lums.push_back(p[0] + p[1] + p[2]);
+            }
+        }
+        if (lums.empty()) {
+            out.push_back(box);
+            continue;
+        }
+        std::sort(lums.begin(), lums.end());
+        const int bg = lums[lums.size() * 9 / 10];
+        const auto is_text = [&](int x, int y) {
+            const std::uint8_t* p = rgb.pixels.data() +
+                (static_cast<std::size_t>(y) * rgb.width + x) * 3;
+            const int r = p[0];
+            const int g = p[1];
+            const int b = p[2];
+            const int lum = r + g + b;
+            if (lum < bg - 70) {
+                return true;
+            }
+            const int mx = std::max(r, std::max(g, b));
+            const int mn = std::min(r, std::min(g, b));
+            return mx - mn > 80 && lum < bg - 20;  // насыщенный: печать, форма
+        };
+        std::vector<int> col(bw, 0);
+        for (int x = 0; x < bw; ++x) {
+            for (int y = box.top; y <= box.bottom; ++y) {
+                if (is_text(box.left + x, y)) {
+                    col[x] += 1;
+                }
+            }
+        }
+        const int gap_level = std::max(2, bh / 12);
+        int first = 0;
+        while (first < bw && col[first] <= gap_level) {
+            ++first;
+        }
+        int last = bw - 1;
+        while (last > first && col[last] <= gap_level) {
+            --last;
+        }
+        const int gap_min = std::max(10, bh);
+        std::vector<int> cuts;
+        int run = 0;
+        for (int x = first; x <= last; ++x) {
+            if (col[x] <= gap_level) {
+                ++run;
+                continue;
+            }
+            if (run >= gap_min) {
+                cuts.push_back(x - run / 2);
+            }
+            run = 0;
+        }
+        if (cuts.empty() || cuts.size() > 7) {
+            out.push_back(box);
+            continue;
+        }
+        std::vector<Box> parts;
+        int start = first;
+        for (const int cut : cuts) {
+            parts.push_back(Box{
+                box.left + start, box.top, box.left + cut - 1, box.bottom,
+                box.score});
+            start = cut;
+        }
+        parts.push_back(Box{
+            box.left + start, box.top, box.left + last, box.bottom, box.score});
+        // Узкие обрывки (одна-две буквы) сливаем обратно с соседним полем.
+        const int min_w = bh * 6 / 5;
+        for (std::size_t i = 0; i < parts.size();) {
+            const int pw = parts[i].right - parts[i].left + 1;
+            if (parts.size() > 1 && pw < min_w) {
+                if (i + 1 < parts.size() &&
+                    (i == 0 ||
+                     parts[i + 1].right - parts[i + 1].left >=
+                         parts[i - 1].right - parts[i - 1].left)) {
+                    parts[i + 1].left = parts[i].left;
+                } else {
+                    parts[i - 1].right = parts[i].right;
+                }
+                parts.erase(parts.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            ++i;
+        }
+        if (parts.size() < 2) {
+            out.push_back(box);
+            continue;
+        }
+        for (auto& part : parts) {
+            part.left = std::clamp(part.left, 0, rgb.width - 1);
+            part.right = std::clamp(part.right, 0, rgb.width - 1);
+            out.push_back(part);
+        }
+    }
+    return out;
+}
+
+// Вертикальные колонки иероглифов (ярлыки форм) детектор видит как цепочку
+// квадратных боксов-глифов (часть теряется). Сцепляем квадраты одного столбца
+// в высокий бокс — его распознаватель прочтёт лентой глифов.
+void merge_vertical_columns(std::vector<Box>& boxes) {
+    const std::size_t n = boxes.size();
+    std::vector<int> parent(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        parent[i] = static_cast<int>(i);
+    }
+    const auto squareish = [&](const Box& b) {
+        const int w = b.right - b.left + 1;
+        const int h = b.bottom - b.top + 1;
+        return w * 10 >= h * 5 && h * 10 >= w * 5;  // 0.5..2.0
+    };
+    for (std::size_t i = 0; i < n; ++i) {
+        if (!squareish(boxes[i])) {
+            continue;
+        }
+        for (std::size_t j = i + 1; j < n; ++j) {
+            if (!squareish(boxes[j])) {
+                continue;
+            }
+            const Box& a = boxes[i];
+            const Box& b = boxes[j];
+            const int aw = a.right - a.left + 1;
+            const int bw = b.right - b.left + 1;
+            const int ah = a.bottom - a.top + 1;
+            const int bh = b.bottom - b.top + 1;
+            const int min_w = std::min(aw, bw);
+            const int ix = std::max(
+                0,
+                std::min(a.right, b.right) - std::max(a.left, b.left));
+            if (ix * 10 < min_w * 6) {
+                continue;
+            }
+            const int ca = (a.left + a.right) / 2;
+            const int cb = (b.left + b.right) / 2;
+            if (std::abs(ca - cb) * 10 > min_w * 4) {
+                continue;
+            }
+            const int gap = std::max(a.top, b.top) - std::min(a.bottom, b.bottom);
+            if (gap < -2 || gap * 10 > std::min(ah, bh) * 16) {
+                continue;
+            }
+            parent[find_root(parent, static_cast<int>(j))] =
+                find_root(parent, static_cast<int>(i));
+        }
+    }
+    std::vector<Box> merged;
+    std::vector<int> count(n, 0);
+    for (std::size_t i = 0; i < n; ++i) {
+        count[static_cast<std::size_t>(find_root(parent, static_cast<int>(i)))] += 1;
+    }
+    std::vector<bool> done(n, false);
+    for (std::size_t i = 0; i < n; ++i) {
+        const int root = find_root(parent, static_cast<int>(i));
+        if (count[static_cast<std::size_t>(root)] >= 2) {
+            if (done[static_cast<std::size_t>(root)]) {
+                continue;
+            }
+            done[static_cast<std::size_t>(root)] = true;
+            Box box = boxes[i];
+            for (std::size_t j = 0; j < n; ++j) {
+                if (find_root(parent, static_cast<int>(j)) != root) {
+                    continue;
+                }
+                box.left = std::min(box.left, boxes[j].left);
+                box.top = std::min(box.top, boxes[j].top);
+                box.right = std::max(box.right, boxes[j].right);
+                box.bottom = std::max(box.bottom, boxes[j].bottom);
+                box.score = std::max(box.score, boxes[j].score);
+            }
+            merged.push_back(box);
+        } else {
+            merged.push_back(boxes[i]);
+        }
+    }
+    boxes = std::move(merged);
+}
+
 std::vector<std::string> load_chars(const std::filesystem::path& dict_path) {
     std::ifstream stream(dict_path, std::ios::binary);
     if (!stream) {
@@ -673,6 +902,7 @@ std::vector<std::string> load_chars(const std::filesystem::path& dict_path) {
 struct TextResult {
     std::string text;
     double confidence{0.0};
+    bool vertical{false};
 };
 
 TextResult recognize_line(
@@ -707,7 +937,53 @@ TextResult recognize_line(
             static_cast<std::size_t>(crop_w) * 3);
     }
 
-    if (textline_ori_session != nullptr) {
+    // Вертикальная колонка (ярлыки формы: 购买方, 销售方, 密码区):
+    // распознаватель читает только горизонтальные строки, поэтому
+    // раскладываем глифы сверху-вниз в горизонтальную ленту слева-направо.
+    int strip_w = crop_w;
+    int strip_h = crop_h;
+    bool vertical = false;
+    if (crop_h >= crop_w * 2 + 4 && crop_w >= 6) {
+        const int glyphs = std::clamp(
+            static_cast<int>(
+                std::lround(static_cast<double>(crop_h) / crop_w)),
+            2, 24);
+        Rgb strip;
+        strip.width = glyphs * 48;
+        strip.height = 48;
+        strip.pixels.assign(
+            static_cast<std::size_t>(strip.width) * 48 * 3, 255);
+        for (int i = 0; i < glyphs; ++i) {
+            Rgb cell;
+            const int top = crop_h * i / glyphs;
+            const int bottom = crop_h * (i + 1) / glyphs;
+            cell.width = crop_w;
+            cell.height = std::max(1, bottom - top);
+            cell.pixels.resize(
+                static_cast<std::size_t>(cell.width) * cell.height * 3);
+            for (int y = 0; y < cell.height; ++y) {
+                std::memcpy(
+                    cell.pixels.data() +
+                        static_cast<std::size_t>(y) * crop_w * 3,
+                    crop.pixels.data() +
+                        static_cast<std::size_t>(top + y) * crop_w * 3,
+                    static_cast<std::size_t>(crop_w) * 3);
+            }
+            const Rgb sized = resize_rgb(cell, 48, 48);
+            std::memcpy(
+                strip.pixels.data() +
+                    static_cast<std::size_t>(i) * 48 * 48 * 3,
+                sized.pixels.data(),
+                static_cast<std::size_t>(48) * 48 * 3);
+        }
+        crop = std::move(strip);
+        strip_w = crop.width;
+        strip_h = crop.height;
+        vertical = true;
+        result.vertical = true;
+    }
+
+    if (!vertical && textline_ori_session != nullptr) {
         const Rgb probe = resize_rgb(crop, 160, 80);
         const auto input = to_nchw(
             probe,
@@ -724,7 +1000,7 @@ TextResult recognize_line(
 
     constexpr int kTargetHeight = 48;
     int target_w = static_cast<int>(std::lround(
-        static_cast<double>(crop_w) * kTargetHeight / crop_h));
+        static_cast<double>(strip_w) * kTargetHeight / strip_h));
     target_w = std::clamp(target_w, 1, 1600);
     const Rgb resized = resize_rgb(crop, target_w, kTargetHeight);
     const auto input = to_nchw(resized, {0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f});
@@ -865,14 +1141,54 @@ OcrLayout recognize_rgb(
     double detect_scale = 1.0;
     Rgb detect_image = rgb;
     const int longest = std::max(rgb.width, rgb.height);
-    if (longest > 0 && longest < 1700) {
-        detect_scale = std::min(2.0, 1800.0 / longest);
+    if (longest > 0 && longest < 3000) {
+        detect_scale = std::min(3.0, 3000.0 / longest);
         detect_image = resize_rgb(
             rgb,
             static_cast<int>(std::lround(rgb.width * detect_scale)),
             static_cast<int>(std::lround(rgb.height * detect_scale)));
     }
-    auto boxes = detect_boxes(det_session, detect_image, 1800);
+    auto boxes = detect_boxes(det_session, detect_image, 3000);
+    // Вертикальные колонки (ярлыки форм вроде 购买方): вторым проходом
+    // детектора по изображению, повёрнутому на 90°, — там они становятся
+    // горизонтальными строками. Оставляем только ставшие вертикальными
+    // в исходной ориентации и не покрытые обычными боксами.
+    {
+        const int dh = detect_image.height;
+        const Rgb rotated = rotate_rgb(detect_image, 90);
+        const auto vboxes = detect_boxes(det_session, rotated, 3000, 0.2, 0.4);
+        for (const auto& vb : vboxes) {
+            Box box;
+            box.left = vb.top;
+            box.right = vb.bottom;
+            box.top = dh - 1 - vb.right;
+            box.bottom = dh - 1 - vb.left;
+            box.score = vb.score;
+            const int bw = box.right - box.left + 1;
+            const int bh = box.bottom - box.top + 1;
+            if (bh * 5 < bw * 4) {
+                continue;
+            }
+            bool covered = false;
+            for (const auto& eb : boxes) {
+                const int ix = std::max(
+                    0,
+                    std::min(box.right, eb.right) -
+                        std::max(box.left, eb.left));
+                const int iy = std::max(
+                    0,
+                    std::min(box.bottom, eb.bottom) -
+                        std::max(box.top, eb.top));
+                if (ix * iy * 10 >= bw * bh * 6) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) {
+                boxes.push_back(box);
+            }
+        }
+    }
     if (detect_scale > 1.0) {
         for (auto& box : boxes) {
             box.left = static_cast<int>(std::lround(box.left / detect_scale));
@@ -882,6 +1198,46 @@ OcrLayout recognize_rgb(
                 static_cast<int>(std::lround(box.bottom / detect_scale));
         }
     }
+    boxes = split_wide_boxes(rgb, boxes);
+    // Грубый бокс-обрубок, почти целиком накрывающий точную строку,
+    // убираем: иначе текст строки дублируется в разметке.
+    for (std::size_t i = 0; i < boxes.size();) {
+        const Box& a = boxes[i];
+        const int aa = (a.right - a.left + 1) * (a.bottom - a.top + 1);
+        const int ah = a.bottom - a.top + 1;
+        bool coarse = false;
+        for (std::size_t j = 0; j < boxes.size() && !coarse; ++j) {
+            if (j == i) {
+                continue;
+            }
+            const Box& b = boxes[j];
+            const int bb = (b.right - b.left + 1) * (b.bottom - b.top + 1);
+            const int bh = b.bottom - b.top + 1;
+            if (aa * 10 < bb * 14 || ah * 5 < bh * 8) {
+                continue;
+            }
+            const int cx = (b.left + b.right) / 2;
+            const int cy = (b.top + b.bottom) / 2;
+            if (cx < a.left || cx > a.right || cy < a.top || cy > a.bottom) {
+                continue;
+            }
+            const int ix = std::max(
+                0,
+                std::min(a.right, b.right) - std::max(a.left, b.left));
+            const int iy = std::max(
+                0,
+                std::min(a.bottom, b.bottom) - std::max(a.top, b.top));
+            if (ix * iy * 2 >= bb) {
+                coarse = true;
+            }
+        }
+        if (coarse) {
+            boxes.erase(boxes.begin() + static_cast<std::ptrdiff_t>(i));
+        } else {
+            ++i;
+        }
+    }
+    merge_vertical_columns(boxes);
     sort_into_lines(boxes);
 
     int median_height = 20;
@@ -981,7 +1337,9 @@ OcrLayout recognize_rgb(
             }
         }
         if (text.text.empty() ||
-            is_noise_text(text.text, text.confidence)) {
+            (text.vertical
+                 ? text.confidence < 45.0
+                 : is_noise_text(text.text, text.confidence))) {
             continue;
         }
         const int center = (box.top + box.bottom) / 2;

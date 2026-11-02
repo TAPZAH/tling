@@ -49,35 +49,46 @@ std::wstring pick_font_name(const std::wstring& text) {
 Gdiplus::Color sample_background(
     Gdiplus::Bitmap& bitmap,
     const Gdiplus::Rect& rect) {
+    // Берём светлый доминирующий цвет по всей области, а не по рамке: рамка
+    // попадает в глифы и давала серые плашки. Тёмные пиксели текста
+    // отбрасываем, среди светлых берём медиану (фон/заливка шапки).
+    const int w = rect.Width;
+    const int h = rect.Height;
+    if (w <= 0 || h <= 0) {
+        return Gdiplus::Color(255, 255, 255, 255);
+    }
+    const int step = std::max(1, std::min(w, h) / 16);
     std::vector<int> red;
     std::vector<int> green;
     std::vector<int> blue;
-    const int step = std::max(1, std::min(rect.Width, rect.Height) / 8);
-    const auto sample = [&](int x, int y) {
-        if (x < 0 || y < 0 || x >= static_cast<int>(bitmap.GetWidth()) ||
-            y >= static_cast<int>(bitmap.GetHeight())) {
-            return;
+    red.reserve(64);
+    green.reserve(64);
+    blue.reserve(64);
+    for (int y = 0; y < h; y += step) {
+        for (int x = 0; x < w; x += step) {
+            const int px = rect.X + x;
+            const int py = rect.Y + y;
+            if (px < 0 || py < 0 ||
+                px >= static_cast<int>(bitmap.GetWidth()) ||
+                py >= static_cast<int>(bitmap.GetHeight())) {
+                continue;
+            }
+            Gdiplus::Color color;
+            if (bitmap.GetPixel(px, py, &color) != Gdiplus::Ok) {
+                continue;
+            }
+            const int lum = color.GetRed() + color.GetGreen() + color.GetBlue();
+            if (lum < 360) {  // тёмный пиксель — вероятно глиф, пропускаем
+                continue;
+            }
+            red.push_back(color.GetRed());
+            green.push_back(color.GetGreen());
+            blue.push_back(color.GetBlue());
         }
-        Gdiplus::Color color;
-        if (bitmap.GetPixel(x, y, &color) == Gdiplus::Ok) {
-            red.push_back(color.GetR());
-            green.push_back(color.GetG());
-            blue.push_back(color.GetB());
-        }
-    };
-    for (int x = rect.X; x < rect.X + rect.Width; x += step) {
-        sample(x, rect.Y);
-        sample(x, rect.Y + rect.Height - 1);
-    }
-    for (int y = rect.Y; y < rect.Y + rect.Height; y += step) {
-        sample(rect.X, y);
-        sample(rect.X + rect.Width - 1, y);
     }
     if (red.empty()) {
         return Gdiplus::Color(255, 255, 255, 255);
     }
-    // Медиана устойчива к тёмным линиям/глифам на рамке выборки: фон берём
-    // как доминирующий цвет, иначе получались серые плашки.
     const auto median = [](std::vector<int>& values) {
         std::sort(values.begin(), values.end());
         return values[values.size() / 2];

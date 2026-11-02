@@ -2295,8 +2295,11 @@ int main() {
         ppocr_script_for_language("tr") == "latin",
         "PP-OCR: tr -> latin");
     require(
-        ppocr_script_for_language("zh").empty(),
-        "PP-OCR: нет распознавателя для zh");
+        ppocr_script_for_language("zh") == "chinese",
+        "PP-OCR: zh -> chinese");
+    require(
+        ppocr_script_for_language("ko").empty(),
+        "PP-OCR: нет распознавателя для ko");
     require(
         normalize_ocr_engine("paddle") == kOcrEnginePaddle,
         "OCR: настройка paddle нормализуется");

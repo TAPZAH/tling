@@ -12,7 +12,8 @@
 namespace offline_translator {
 
 // Скрипт (группа письменности) PP-OCR для ISO-кода приложения: "latin"
-// (en/de/fr/es/tr/pl/...), "eslav" (ru/uk/be/bg). Пусто — нет распознавателя.
+// (en/de/fr/es/tr/pl/...), "eslav" (ru/uk/be/bg), "chinese" (zh/zt/ja).
+// Пусто — нет распознавателя.
 std::string ppocr_script_for_language(std::string_view code);
 
 // Каталог моделей PP-OCR:
@@ -23,9 +24,15 @@ std::filesystem::path default_ppocr_root();
 
 // Есть ли базовый набор (детектор + хотя бы один распознаватель) в каталоге.
 bool ppocr_installed(const std::filesystem::path& root = {});
-// Установлен ли распознаватель скрипта ("latin"/"eslav").
+// Установлен ли распознаватель скрипта ("latin"/"eslav"/"chinese").
 bool ppocr_script_installed(
     std::string_view script,
+    const std::filesystem::path& root = {});
+
+// Докачивает распознаватель скрипта (например, "chinese") в каталог моделей.
+void download_ppocr_script(
+    std::string_view script,
+    const ProgressCallback& progress = {},
     const std::filesystem::path& root = {});
 
 // OCR на моделях PaddleOCR (PP-OCR) через ONNX Runtime. Детектор текстовых

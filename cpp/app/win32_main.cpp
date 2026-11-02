@@ -3790,7 +3790,14 @@ std::vector<std::string> current_ocr_languages() {
     } catch (const std::exception&) {
     }
     if (offline_translator::ocr_paddle_ready()) {
-        return {"en", "ru"};
+        std::vector<std::string> codes{"en", "ru"};
+        // Китайский подключаем в «Авто» только если модель уже скачана
+        // (по запросу), чтобы не замедлять обычные документы.
+        if (offline_translator::ppocr_script_installed(
+                "chinese", offline_translator::default_ppocr_root())) {
+            codes.push_back("zh");
+        }
+        return codes;
     }
     const auto root = offline_translator::default_tessdata_root();
     std::vector<std::string> codes;
@@ -3818,6 +3825,79 @@ bool ensure_ocr_languages(
             }
         }
         if (all_supported) {
+            const auto ppocr_root = offline_translator::default_ppocr_root();
+            std::vector<std::string> missing_scripts;
+            std::wstring names;
+            for (const auto& code : ocr_languages) {
+                const std::string script =
+                    offline_translator::ppocr_script_for_language(code);
+                if (script.empty() ||
+                    offline_translator::ppocr_script_installed(
+                        script, ppocr_root)) {
+                    continue;
+                }
+                if (std::find(
+                        missing_scripts.begin(),
+                        missing_scripts.end(),
+                        script) != missing_scripts.end()) {
+                    continue;
+                }
+                missing_scripts.push_back(script);
+                if (!names.empty()) {
+                    names += L", ";
+                }
+                names += from_utf8(
+                    offline_translator::language_store_name(code));
+            }
+            if (missing_scripts.empty()) {
+                return true;
+            }
+            const std::wstring question =
+                L"Для распознавания нужна модель OCR («" + names +
+                L"», около 81 МБ, скачивается один раз).\n\nСкачать сейчас?";
+            if (localized_message_box(
+                    window,
+                    question.c_str(),
+                    L"Перевод области экрана",
+                    MB_ICONQUESTION | MB_YESNO) != IDYES) {
+                return false;
+            }
+            set_status(L"Скачивание модели OCR…");
+            try {
+                for (const auto& script : missing_scripts) {
+                    offline_translator::download_ppocr_script(
+                        script,
+                        [window](
+                            std::uint64_t downloaded,
+                            std::uint64_t total,
+                            std::string_view) {
+                            const int percent = total > 0
+                                ? static_cast<int>(
+                                      downloaded * 100 / total)
+                                : 0;
+                            set_status(
+                                L"Скачивание модели OCR… " +
+                                std::to_wstring(percent) + L"%");
+                            MSG message{};
+                            while (PeekMessageW(
+                                &message, window, 0, 0, PM_REMOVE)) {
+                                TranslateMessage(&message);
+                                DispatchMessageW(&message);
+                            }
+                        },
+                        ppocr_root);
+                }
+            } catch (const std::exception& error) {
+                const std::wstring message =
+                    L"Не удалось скачать модель OCR:\n" +
+                    from_utf8(error.what());
+                localized_message_box(
+                    window,
+                    message.c_str(),
+                    L"Перевод области экрана",
+                    MB_ICONERROR | MB_OK);
+                return false;
+            }
             return true;
         }
     }
@@ -4228,7 +4308,21 @@ std::pair<std::string, std::string> excel_direction(
         // Онлайн Google сам определяет язык лучше нашему детектору — иначе
         // турецкий/другие языки уходят как английские и не переводятся.
         if (config.engine == offline_translator::EngineKind::google) {
-            return {"auto", config.target};
+            std::string target = config.target;
+            // Если текст уже на языке перевода, Google вернул бы его без
+            // изменений (ru→ru). В этом случае берём резервный язык.
+            const std::string detected =
+                detect_source_language(text, config.engine);
+            if (detected == target) {
+                const std::string fallback = config.fallback_target;
+                if (fallback.empty() || fallback == target ||
+                    fallback == detected) {
+                    target = detected == "en" ? "ru" : "en";
+                } else {
+                    target = fallback;
+                }
+            }
+            return {"auto", target};
         }
         const std::string source =
             detect_source_language(text, config.engine);
@@ -9789,14 +9883,40 @@ int WINAPI wWinMain(
         config.output_path = output;
         config.output_png =
             _wcsicmp(output.extension().c_str(), L".png") == 0;
-        const auto tessdata = offline_translator::default_tessdata_root();
-        for (const char* code : {"en", "ru"}) {
-            if (offline_translator::tessdata_installed(code, tessdata)) {
-                config.ocr_languages.push_back(code);
+        if (config.manual_source) {
+            config.ocr_languages.push_back(config.source);
+        } else {
+            const auto tessdata = offline_translator::default_tessdata_root();
+            for (const char* code : {"en", "ru"}) {
+                if (offline_translator::tessdata_installed(code, tessdata)) {
+                    config.ocr_languages.push_back(code);
+                }
+            }
+            if (config.ocr_languages.empty()) {
+                config.ocr_languages.push_back("en");
+            }
+            // Если модель китайского уже скачана — читаем и его в «Авто».
+            if (offline_translator::ocr_paddle_ready() &&
+                offline_translator::ppocr_script_installed(
+                    "chinese", offline_translator::default_ppocr_root())) {
+                config.ocr_languages.push_back("zh");
             }
         }
-        if (config.ocr_languages.empty()) {
-            config.ocr_languages.push_back("en");
+        // CLI: для явно выбранного языка докачиваем модель PP-OCR без диалога.
+        if (offline_translator::ocr_paddle_ready()) {
+            const auto ppocr_root = offline_translator::default_ppocr_root();
+            for (const auto& code : config.ocr_languages) {
+                const std::string script =
+                    offline_translator::ppocr_script_for_language(code);
+                if (!script.empty() &&
+                    !offline_translator::ppocr_script_installed(
+                        script, ppocr_root)) {
+                    offline_translator::app_log_info(
+                        "CLI: скачиваю модель OCR " + script);
+                    offline_translator::download_ppocr_script(
+                        script, {}, ppocr_root);
+                }
+            }
         }
         Gdiplus::GdiplusStartupInput gdiplus_input{};
         ULONG_PTR gdiplus_token = 0;
