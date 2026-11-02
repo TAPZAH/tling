@@ -4967,7 +4967,9 @@ offline_translator::LayoutPage ocr_raster_page(
     const ExcelJobConfig& config,
     const std::vector<std::uint8_t>& bgra,
     int width,
-    int height) {
+    int height,
+    int* rotation_out = nullptr) {
+    int last_rotation = 0;
     const auto build = [&]() {
         int rotation = 0;
         const auto layout = offline_translator::recognize_best_orientation(
@@ -4978,6 +4980,7 @@ offline_translator::LayoutPage ocr_raster_page(
             width * 4,
             4,
             &rotation);
+        last_rotation = rotation;
         int rotated_width = width;
         int rotated_height = height;
         std::vector<std::uint8_t> rotated;
@@ -5002,6 +5005,7 @@ offline_translator::LayoutPage ocr_raster_page(
         return offline_translator::build_layout_page(layout, grid_segments);
     };
 
+    const auto run = [&]() {
     auto page = build();
     if (config.manual_source) {
         return page;
@@ -5049,6 +5053,12 @@ offline_translator::LayoutPage ocr_raster_page(
     } catch (const std::exception&) {
         return page;
     }
+    };
+    auto page = run();
+    if (rotation_out != nullptr) {
+        *rotation_out = last_rotation;
+    }
+    return page;
 }
 
 bool process_document(
@@ -5108,12 +5118,27 @@ bool process_document(
                                     offline_translator::OcrEngine>();
                                 ocr->initialize_multi(config.ocr_languages);
                             }
+                            int raster_rotation = 0;
                             page = ocr_raster_page(
                                 *ocr,
                                 config,
                                 raster,
                                 raster_width,
-                                raster_height);
+                                raster_height,
+                                &raster_rotation);
+                            if (raster_rotation != 0 && !raster.empty()) {
+                                // Раскладка уже в координатах довёрнутого
+                                // изображения — растер крутим туда же,
+                                // иначе оверлей и размеры не совпадут.
+                                raster = offline_translator::rotate_bgra_image(
+                                    raster.data(),
+                                    raster_width,
+                                    raster_height,
+                                    raster_width * 4,
+                                    raster_rotation,
+                                    &raster_width,
+                                    &raster_height);
+                            }
                         }
                         if (config.output_png) {
                             // PNG-оверлей рисуется по блокам: с таблицами
@@ -5148,10 +5173,22 @@ bool process_document(
                 } else {
                     offline_translator::OcrEngine ocr;
                     ocr.initialize_multi(config.ocr_languages);
-                    auto page = ocr_raster_page(ocr, config, image, width, height);
+                    int page_rotation = 0;
+                    auto page = ocr_raster_page(
+                        ocr, config, image, width, height, &page_rotation);
                     if (config.output_png) {
                         // См. выше: PNG рисуется по блокам.
                         page.tables.clear();
+                    }
+                    if (page_rotation != 0) {
+                        image = offline_translator::rotate_bgra_image(
+                            image.data(),
+                            width,
+                            height,
+                            width * 4,
+                            page_rotation,
+                            &width,
+                            &height);
                     }
                     page_text_counts.push_back(
                         offline_translator::layout_texts(page).size());

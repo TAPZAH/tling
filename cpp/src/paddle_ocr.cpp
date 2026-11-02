@@ -1584,7 +1584,10 @@ OcrLayout PaddleOcrEngine::recognize_layout_oriented(
     }
     const Rgb rotated = rotate_rgb(original, -angle);
     if (rotation_degrees != nullptr) {
-        *rotation_degrees = angle;
+        // Угол по часовой стрелке, на которое надо повернуть ИСХОДНОЕ
+        // изображение, чтобы получить координаты раскладки: та же конвенция,
+        // что у Tesseract-пути и rotate_bgra_image (-angle == +(360-angle)).
+        *rotation_degrees = (360 - angle) % 360;
     }
     return recognize_rgb(
         impl_->det,
