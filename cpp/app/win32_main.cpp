@@ -4510,6 +4510,10 @@ bool excel_paste_text(const std::wstring& text, std::wstring* error) {
 // запуска потока).
 struct ExcelJobConfig {
     bool manual_source{false};
+    // Документ/картинка: направление задано на уровне всего документа,
+    // поячеечное переопределение запрещено (иначе смешанные ячейки
+    // уезжают в обратную сторону).
+    bool lock_direction{false};
     std::string source;
     std::string target;
     std::string fallback_target;
@@ -4535,6 +4539,9 @@ std::pair<std::string, std::string> excel_direction(
     const ExcelJobConfig& config,
     const std::wstring& cell) {
     const std::string text = to_utf8(cell);
+    if (config.manual_source && config.lock_direction) {
+        return {config.source, config.target};
+    }
     if (!config.manual_source) {
         // Онлайн Google сам определяет язык лучше нашему детектору — иначе
         // турецкий/другие языки уходят как английские и не переводятся.
@@ -5231,9 +5238,26 @@ bool process_document(
                             detect_language_optional(sample, config.engine);
                         if (!detected.empty() && detected != config.target) {
                             config.manual_source = true;
+                            config.lock_direction = true;
                             config.source = detected;
                             offline_translator::app_log_info(
                                 "документ: язык источника " + detected);
+                        } else if (
+                            !detected.empty() && detected == config.target) {
+                            // Документ уже на языке перевода — резервный язык
+                            // применим один раз ко всему документу, а поячеечное
+                            // направление блокируем: иначе ячейки с латинскими
+                            // кодами (артикул, ET) разворачиваются en->ru.
+                            const std::string fallback = config.fallback_target;
+                            if (!fallback.empty() && fallback != detected) {
+                                config.manual_source = true;
+                                config.lock_direction = true;
+                                config.source = detected;
+                                config.target = fallback;
+                                offline_translator::app_log_info(
+                                    "документ: язык совпал с целью, резервный " +
+                                    fallback);
+                            }
                         }
                     }
                 }
