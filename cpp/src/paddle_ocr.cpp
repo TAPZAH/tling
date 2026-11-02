@@ -181,7 +181,15 @@ void download_ppocr_script(
 }
 
 namespace {
-bool g_accurate_det = false;
+bool accurate_det_from_env() {
+    const char* env = std::getenv("TLING_OCR_ACCURATE");
+    if (env == nullptr) {
+        return false;
+    }
+    const std::string value(env);
+    return value == "1" || value == "accurate";
+}
+bool g_accurate_det = accurate_det_from_env();
 }  // пространство имён
 
 void set_ppocr_accurate(bool accurate) {

@@ -328,7 +328,22 @@ Win32 GUI показывает полный каталог из 56 языков 
 `clipboard_history_limit` (1–50), `double_ctrl_c_translation`,
 `result_window_mode`, `translate_hotkey` (по умолчанию `Ctrl+Shift+T`) и
 `architecture` (размер моделей Firefox). Прочие ключи при записи
-не затираются.
+не затираются. Ключ `ocr_engine` (`auto` / `tesseract` / `paddle`) выбирает
+движок OCR, `ocr_quality` (`fast` / `accurate`) — серверный детектор PP-OCRv5
+(скачивается по запросу, ~87 МБ, заметно точнее на сканах).
+
+## Регресс OCR (CER/WER)
+
+```powershell
+# эталоны лежат в samples/ocr-compare/refs (создаются/обновляются вручную)
+powershell -File cpp\tools\ocr_regression.ps1            # быстрый режим
+powershell -File cpp\tools\ocr_regression.ps1 -Accurate  # точный режим
+powershell -File cpp\tools\ocr_regression.ps1 -UpdateRefs -Accurate
+```
+
+Скрипт прогоняет `paddle_ocr_smoke` по 5 эталонным документам и печатает
+CER/WER; `-MaxCer` (по умолчанию 10%) задаёт порог провала. Переменная
+`TLING_OCR_ACCURATE=1` включает серверный детектор для любых инструментов.
 
 Окно «Пакеты» показывает NLLB и пары Argos из кэша `argospm-index` (и уже
 установленные). Для движка MarianMT добавляется секция «MarianMT · …» по
