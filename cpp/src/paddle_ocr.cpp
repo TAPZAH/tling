@@ -225,6 +225,22 @@ void download_ppocr_server_det(
         "Точная модель OCR (детектор PP-OCRv5)");
 }
 
+void download_ppocr_table_structure(
+    const ProgressCallback& progress,
+    const std::filesystem::path& root) {
+    const auto dir = root.empty() ? default_ppocr_root() : root;
+    if (dir.empty()) {
+        throw std::runtime_error("ppocr: не найден каталог моделей");
+    }
+    std::filesystem::create_directories(dir);
+    download_resumable(
+        {"https://www.modelscope.cn/models/RapidAI/RapidTable/resolve/"
+         "v2.0.0/slanet-plus.onnx"},
+        dir / "table_slanet.onnx",
+        progress,
+        "Модель структуры таблиц (SLANet)");
+}
+
 namespace {
 
 // --- изображения -----------------------------------------------------------

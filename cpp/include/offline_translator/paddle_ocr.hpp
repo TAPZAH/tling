@@ -46,6 +46,11 @@ void download_ppocr_server_det(
     const ProgressCallback& progress = {},
     const std::filesystem::path& root = {});
 
+// Структурная модель таблиц SLANet (table_slanet.onnx, ~8 МБ).
+void download_ppocr_table_structure(
+    const ProgressCallback& progress = {},
+    const std::filesystem::path& root = {});
+
 // Структурная модель таблиц SLANet (table_slanet.onnx, ~7 МБ).
 bool ppocr_table_structure_installed(const std::filesystem::path& root = {});
 // Разметка табличной области: ячейки в пикселях исходного изображения.

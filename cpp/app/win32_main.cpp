@@ -5012,15 +5012,14 @@ offline_translator::LayoutPage ocr_raster_page(
         auto page =
             offline_translator::build_layout_page(layout, grid_segments);
         // Таблицы без линий: структуру ячеек даёт SLANet (если модель стоит).
-        // Включается переменной TLING_TABLE_SLANET=1: на страницах без
-        // настоящих таблиц модель склонна «выдумывать» ячейки.
+        // По умолчанию включено; TLING_TABLE_SLANET=0 отключает.
         const bool slanet_enabled = [] {
             const char* env = std::getenv("TLING_TABLE_SLANET");
             if (env == nullptr) {
-                return false;
+                return true;
             }
             const std::string value(env);
-            return value == "1" || value == "on" || value == "true";
+            return !(value == "0" || value == "off" || value == "false");
         }();
         if (!config.output_png && slanet_enabled &&
             offline_translator::ppocr_table_structure_installed()) {
@@ -7197,6 +7196,9 @@ void apply_settings_dialog(HWND settings_window) {
             if (confirmed) {
                 try {
                     offline_translator::download_ppocr_server_det();
+                    if (!offline_translator::ppocr_table_structure_installed()) {
+                        offline_translator::download_ppocr_table_structure();
+                    }
                 } catch (const std::exception& error) {
                     localized_message_box(
                         settings_window,
@@ -10554,6 +10556,9 @@ int WINAPI wWinMain(
                     "CLI: скачиваю серверный детектор OCR");
                 try {
                     offline_translator::download_ppocr_server_det();
+                    if (!offline_translator::ppocr_table_structure_installed()) {
+                        offline_translator::download_ppocr_table_structure();
+                    }
                 } catch (const std::exception& error) {
                     offline_translator::app_log_warn(
                         std::string("CLI: не удалось скачать серверный "
