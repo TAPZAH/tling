@@ -5009,7 +5009,68 @@ offline_translator::LayoutPage ocr_raster_page(
                 rotated_width,
                 rotated_height,
                 rotated_width * 4);
-        return offline_translator::build_layout_page(layout, grid_segments);
+        auto page =
+            offline_translator::build_layout_page(layout, grid_segments);
+        // Ячейки таблиц распознаём повторно по кропу: текст не «протекает»
+        // между ячейками, вертикальные заголовки читаются лентой глифов.
+        if (!config.output_png && !page.tables.empty()) {
+            std::vector<offline_translator::OcrRegion> regions;
+            std::vector<std::pair<std::size_t, std::size_t>> refs;
+            for (std::size_t table_index = 0;
+                 table_index < page.tables.size();
+                 ++table_index) {
+                const auto& table = page.tables[table_index];
+                for (std::size_t text_index = 0;
+                     text_index < table.texts.size();
+                     ++text_index) {
+                    const auto& text = table.texts[text_index];
+                    const int column_end = text.column + text.column_span;
+                    const int row_end = text.row + text.row_span;
+                    if (text.column < 0 || column_end < 1 || row_end < 1 ||
+                        column_end >=
+                            static_cast<int>(table.columns.size()) ||
+                        row_end >= static_cast<int>(table.rows.size())) {
+                        continue;
+                    }
+                    const int x0 = table.columns[static_cast<std::size_t>(
+                                       text.column)] +
+                        2;
+                    const int y0 =
+                        table.rows[static_cast<std::size_t>(text.row)] + 2;
+                    const int x1 = table.columns[static_cast<std::size_t>(
+                                       column_end)] -
+                        2;
+                    const int y1 =
+                        table.rows[static_cast<std::size_t>(row_end)] - 2;
+                    if (x1 - x0 < 8 || y1 - y0 < 6) {
+                        continue;
+                    }
+                    regions.push_back({x0, y0, x1, y1});
+                    refs.emplace_back(table_index, text_index);
+                }
+            }
+            if (!regions.empty()) {
+                const auto recognized = engine.recognize_regions(
+                    grid_image,
+                    rotated_width,
+                    rotated_height,
+                    rotated_width * 4,
+                    4,
+                    regions);
+                for (std::size_t index = 0;
+                     index < recognized.size() && index < refs.size();
+                     ++index) {
+                    const auto& result = recognized[index];
+                    if (result.text.empty() || result.confidence < 45.0) {
+                        continue;
+                    }
+                    auto& text = page.tables[refs[index].first]
+                                     .texts[refs[index].second];
+                    text.text = from_utf8(result.text);
+                }
+            }
+        }
+        return page;
     };
 
     const auto run = [&]() {

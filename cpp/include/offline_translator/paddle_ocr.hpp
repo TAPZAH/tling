@@ -72,6 +72,17 @@ public:
         int bytes_per_line,
         int bytes_per_pixel);
 
+    // Распознаёт заданные области (ячейки таблиц) без детектора: область
+    // режется на строки по профилю, вертикальные колонки собираются лентой
+    // глифов (см. OcrRegion в ocr_engine.hpp).
+    std::vector<OcrRegionText> recognize_regions(
+        const std::uint8_t* image,
+        int width,
+        int height,
+        int bytes_per_line,
+        int bytes_per_pixel,
+        const std::vector<OcrRegion>& regions);
+
     // recognize_layout + подбор ориентации страницы моделью doc_ori.
     // rotation_degrees (если задан) получает применённый угол (0/90/180/270).
     OcrLayout recognize_layout_oriented(

@@ -644,6 +644,33 @@ OcrLayout OcrEngine::recognize_layout_oriented(
     return recognize_layout(image, width, height, bytes_per_line, bytes_per_pixel);
 }
 
+std::vector<OcrRegionText> OcrEngine::recognize_regions(
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel,
+    const std::vector<OcrRegion>& regions) {
+#ifdef OT_PADDLE_OCR
+    if (impl_->paddle_mode && impl_->paddle) {
+        return impl_->paddle->recognize_regions(
+            image,
+            width,
+            height,
+            bytes_per_line,
+            bytes_per_pixel,
+            regions);
+    }
+#endif
+    (void)image;
+    (void)width;
+    (void)height;
+    (void)bytes_per_line;
+    (void)bytes_per_pixel;
+    (void)regions;
+    return {};
+}
+
 namespace {
 
 // Поворот BGRA на 90/180/270. Для других форматов поворот не поддержан.

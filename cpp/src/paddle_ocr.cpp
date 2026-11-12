@@ -1140,6 +1140,68 @@ bool is_noise_text(const std::string& text, double confidence) {
     return false;
 }
 
+// Режет область на текстовые строки по горизонтальному профилю тёмных
+// пикселей. Высокие узкие области не режем — их читает лента глифов.
+std::vector<Box> split_region_lines(const Rgb& rgb, const Box& region) {
+    const int left = std::clamp(region.left, 0, rgb.width - 1);
+    const int right = std::clamp(region.right, 0, rgb.width - 1);
+    const int top = std::clamp(region.top, 0, rgb.height - 1);
+    const int bottom = std::clamp(region.bottom, 0, rgb.height - 1);
+    const int width = right - left + 1;
+    const int height = bottom - top + 1;
+    if (width < 4 || height < 4) {
+        return {};
+    }
+    std::vector<int> lums;
+    lums.reserve(static_cast<std::size_t>(width) * height);
+    for (int y = top; y <= bottom; ++y) {
+        const std::uint8_t* row =
+            rgb.pixels.data() + static_cast<std::size_t>(y) * rgb.width * 3;
+        for (int x = left; x <= right; ++x) {
+            const std::uint8_t* p = row + static_cast<std::size_t>(x) * 3;
+            lums.push_back(p[0] + p[1] + p[2]);
+        }
+    }
+    std::sort(lums.begin(), lums.end());
+    const int background = lums[lums.size() * 9 / 10];
+    const int text_level = background - 70;
+    std::vector<int> rows(static_cast<std::size_t>(height), 0);
+    for (int y = 0; y < height; ++y) {
+        const std::uint8_t* row = rgb.pixels.data() +
+            static_cast<std::size_t>(top + y) * rgb.width * 3;
+        int count = 0;
+        for (int x = 0; x < width; ++x) {
+            const std::uint8_t* p =
+                row + static_cast<std::size_t>(left + x) * 3;
+            if (p[0] + p[1] + p[2] < text_level) {
+                ++count;
+            }
+        }
+        rows[static_cast<std::size_t>(y)] = count;
+    }
+    const int min_pixels = std::max(1, width / 50);
+    std::vector<Box> lines;
+    int run_start = -1;
+    for (int y = 0; y <= height; ++y) {
+        const bool on =
+            y < height && rows[static_cast<std::size_t>(y)] >= min_pixels;
+        if (on && run_start < 0) {
+            run_start = y;
+        } else if (!on && run_start >= 0) {
+            const int y0 = run_start;
+            const int y1 = y - 1;
+            if (y1 - y0 + 1 >= 4) {
+                lines.push_back(Box{left, top + y0, right, top + y1, 1.0});
+            }
+            run_start = -1;
+        }
+    }
+    if (lines.empty()) {
+        lines.push_back(Box{left, top, right, bottom, 1.0});
+    }
+    return lines;
+}
+
 int detect_doc_angle(Session& doc_ori_session, const Rgb& rgb) {
     const Rgb resized = resize_rgb(rgb, 224, 224);
     const auto input = to_nchw(
@@ -1595,6 +1657,89 @@ OcrLayout PaddleOcrEngine::recognize_layout_oriented(
         impl_->textline_ori.session != nullptr ? &impl_->textline_ori
                                                : nullptr,
         rotated);
+}
+
+std::vector<OcrRegionText> PaddleOcrEngine::recognize_regions(
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel,
+    const std::vector<OcrRegion>& regions) {
+    if (!is_initialized()) {
+        throw std::runtime_error("ppocr: движок не инициализирован");
+    }
+    const Rgb rgb =
+        to_rgb(image, width, height, bytes_per_line, bytes_per_pixel);
+    std::vector<OcrRegionText> results;
+    results.reserve(regions.size());
+    Session* textline_ori = impl_->textline_ori.session != nullptr
+        ? &impl_->textline_ori
+        : nullptr;
+    for (const auto& region : regions) {
+        OcrRegionText result;
+        result.left = region.left;
+        result.top = region.top;
+        result.right = region.right;
+        result.bottom = region.bottom;
+        if (rgb.width <= 0 || rgb.height <= 0) {
+            results.push_back(std::move(result));
+            continue;
+        }
+        const Box box{
+            std::clamp(region.left, 0, rgb.width - 1),
+            std::clamp(region.top, 0, rgb.height - 1),
+            std::clamp(region.right, 0, rgb.width - 1),
+            std::clamp(region.bottom, 0, rgb.height - 1),
+            1.0};
+        const int box_width = box.right - box.left + 1;
+        const int box_height = box.bottom - box.top + 1;
+        if (box_width < 4 || box_height < 4) {
+            results.push_back(std::move(result));
+            continue;
+        }
+        // Высокая узкая область — вертикальная колонка: читаем лентой
+        // глифов целиком, иначе режем на строки по профилю.
+        std::vector<Box> lines;
+        if (box_height >= box_width * 2) {
+            lines.push_back(box);
+        } else {
+            lines = split_region_lines(rgb, box);
+        }
+        double confidence_sum = 0.0;
+        int confidence_count = 0;
+        for (const auto& line : lines) {
+            TextResult best;
+            best.confidence = -1.0;
+            for (auto& recognizer : impl_->recognizers) {
+                TextResult candidate = recognize_line(
+                    recognizer.session,
+                    recognizer.chars,
+                    rgb,
+                    line,
+                    textline_ori);
+                if (candidate.confidence > best.confidence) {
+                    best = std::move(candidate);
+                }
+            }
+            if (best.text.empty() ||
+                (!best.vertical &&
+                 is_noise_text(best.text, best.confidence))) {
+                continue;
+            }
+            if (!result.text.empty()) {
+                result.text += '\n';
+            }
+            result.text += best.text;
+            confidence_sum += best.confidence;
+            ++confidence_count;
+        }
+        if (confidence_count > 0) {
+            result.confidence = confidence_sum / confidence_count;
+        }
+        results.push_back(std::move(result));
+    }
+    return results;
 }
 
 }  // namespace offline_translator

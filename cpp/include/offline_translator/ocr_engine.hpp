@@ -48,6 +48,24 @@ struct OcrLayout {
     std::vector<OcrWordBox> words;
 };
 
+// Прямоугольная область для распознавания без детектора (ячейка таблицы).
+struct OcrRegion {
+    int left{0};
+    int top{0};
+    int right{0};
+    int bottom{0};
+};
+
+// Текст области: строки разделены '\n', уверенность — средняя по строкам.
+struct OcrRegionText {
+    std::string text;
+    double confidence{0.0};
+    int left{0};
+    int top{0};
+    int right{0};
+    int bottom{0};
+};
+
 // ISO-код приложения (en, zh, zt, ...) → код языка Tesseract (eng, chi_sim,
 // chi_tra, ...). Бросает std::runtime_error для неподдержанного языка.
 std::string tesseract_language_code(std::string_view code);
@@ -128,6 +146,17 @@ public:
         int bytes_per_line,
         int bytes_per_pixel,
         int* rotation_degrees = nullptr);
+
+    // Распознаёт заданные области (ячейки таблиц) без детектора: область
+    // режется на строки по профилю, вертикальные колонки собираются лентой
+    // глифов. Для Tesseract-бэкенда возвращает пустые результаты.
+    std::vector<OcrRegionText> recognize_regions(
+        const std::uint8_t* image,
+        int width,
+        int height,
+        int bytes_per_line,
+        int bytes_per_pixel,
+        const std::vector<OcrRegion>& regions);
 
 private:
     struct Impl;
