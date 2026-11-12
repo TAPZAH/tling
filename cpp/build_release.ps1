@@ -6,7 +6,9 @@
 #   5) src.zip              -> release/ (git archive HEAD)
 param(
     [string]$BuildDir = "$PSScriptRoot\build-ctranslate2",
-    [string]$OutputRoot = (Join-Path $PSScriptRoot "..\release")
+    [string]$OutputRoot = (Join-Path $PSScriptRoot "..\release"),
+    # Сборки с моделями (~950 МБ) собираются только по явному указанию.
+    [switch]$IncludeModels
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +54,7 @@ Copy-Item (Join-Path $PSScriptRoot "portable-lite.zip") `
     (Join-Path $OutputRoot "tling-$version-portable.zip")
 
 Write-Output "=== 3. Портатив с моделями ==="
+if ($IncludeModels) {
 & powershell -ExecutionPolicy Bypass -File $pack -BuildDir $BuildDir `
     -OutputDir (Join-Path $PSScriptRoot "portable-full") -IncludeModels -CreateZip
 if ($LASTEXITCODE -ne 0) { throw "package_win32.ps1 (full) завершился с кодом $LASTEXITCODE" }
@@ -65,6 +68,9 @@ $fullSetup = Get-ChildItem (Join-Path $PSScriptRoot "installer-output") -Filter 
     Select-Object -First 1
 if (-not $fullSetup) { throw "Установщик с моделями не найден в installer-output" }
 Copy-Item $fullSetup.FullName (Join-Path $OutputRoot "tling-$version-setup-with-models.exe")
+} else {
+    Write-Output "Пропущено: сборки с моделями (нужен ключ -IncludeModels)"
+}
 
 Write-Output "=== 5. Исходники ==="
 & git -C $repoRoot archive --format=zip -o (Join-Path $OutputRoot "tling-$version-src.zip") HEAD
