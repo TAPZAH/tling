@@ -418,10 +418,70 @@ std::vector<LayoutTable> build_tables_from_grid(
     const std::vector<WordInfo>& words) {
     std::vector<LayoutTable> tables;
     for (const auto& frame : find_table_frames(grid)) {
-        const int rows = static_cast<int>(frame.ys.size()) - 1;
-        const int columns = static_cast<int>(frame.xs.size()) - 1;
+        int rows = static_cast<int>(frame.ys.size()) - 1;
+        int columns = static_cast<int>(frame.xs.size()) - 1;
         if (rows < 2 || columns < 2) {
             continue;
+        }
+        // Штрихи и рамки дают ложные линии: в сетке появляются десятки
+        // пустых колонок/строк. Схлопываем подряд идущие пустые полосы
+        // (граница остаётся, пока хотя бы с одной стороны есть слова).
+        std::vector<int> xs = frame.xs;
+        std::vector<int> ys = frame.ys;
+        {
+            std::vector<int> column_hits(xs.size(), 0);
+            std::vector<int> row_hits(ys.size(), 0);
+            for (const auto& word : words) {
+                if (word.text.empty()) {
+                    continue;
+                }
+                const int cx = (word.left + word.right) / 2;
+                const int cy = (word.top + word.bottom) / 2;
+                if (cx < xs.front() || cx > xs.back() || cy < ys.front() ||
+                    cy > ys.back()) {
+                    continue;
+                }
+                const int column = std::clamp(
+                    static_cast<int>(
+                        std::upper_bound(xs.begin(), xs.end(), cx) -
+                        xs.begin()) - 1,
+                    0,
+                    columns - 1);
+                const int row = std::clamp(
+                    static_cast<int>(
+                        std::upper_bound(ys.begin(), ys.end(), cy) -
+                        ys.begin()) - 1,
+                    0,
+                    rows - 1);
+                ++column_hits[static_cast<std::size_t>(column)];
+                ++row_hits[static_cast<std::size_t>(row)];
+            }
+            std::vector<int> pruned_xs;
+            pruned_xs.push_back(xs.front());
+            for (std::size_t boundary = 1; boundary + 1 < xs.size();
+                 ++boundary) {
+                if (column_hits[boundary - 1] > 0 ||
+                    column_hits[boundary] > 0) {
+                    pruned_xs.push_back(xs[boundary]);
+                }
+            }
+            pruned_xs.push_back(xs.back());
+            std::vector<int> pruned_ys;
+            pruned_ys.push_back(ys.front());
+            for (std::size_t boundary = 1; boundary + 1 < ys.size();
+                 ++boundary) {
+                if (row_hits[boundary - 1] > 0 || row_hits[boundary] > 0) {
+                    pruned_ys.push_back(ys[boundary]);
+                }
+            }
+            pruned_ys.push_back(ys.back());
+            xs = std::move(pruned_xs);
+            ys = std::move(pruned_ys);
+            rows = static_cast<int>(ys.size()) - 1;
+            columns = static_cast<int>(xs.size()) - 1;
+            if (rows < 2 || columns < 2) {
+                continue;
+            }
         }
         // Слова по (строка, грубая колонка) — колонку потом уточняем интервалом.
         std::vector<std::vector<const WordInfo*>> by_row(
@@ -434,13 +494,12 @@ std::vector<LayoutTable> build_tables_from_grid(
             }
             const int cx = (word.left + word.right) / 2;
             const int cy = (word.top + word.bottom) / 2;
-            if (cx < frame.xs.front() || cx > frame.xs.back() ||
-                cy < frame.ys.front() || cy > frame.ys.back()) {
+            if (cx < xs.front() || cx > xs.back() || cy < ys.front() ||
+                cy > ys.back()) {
                 continue;
             }
             int row = static_cast<int>(
-                std::upper_bound(frame.ys.begin(), frame.ys.end(), cy) -
-                frame.ys.begin()) - 1;
+                std::upper_bound(ys.begin(), ys.end(), cy) - ys.begin()) - 1;
             row = std::clamp(row, 0, rows - 1);
             by_row[static_cast<std::size_t>(row)].push_back(&word);
             word_columns[static_cast<std::size_t>(row)].push_back(cx);
@@ -468,9 +527,9 @@ std::vector<LayoutTable> build_tables_from_grid(
                 const bool active = boundary == columns ||
                     has_vertical_border(
                         frame.vertical,
-                        frame.xs[static_cast<std::size_t>(boundary)],
-                        frame.ys[static_cast<std::size_t>(row)],
-                        frame.ys[static_cast<std::size_t>(row + 1)]);
+                        xs[static_cast<std::size_t>(boundary)],
+                        ys[static_cast<std::size_t>(row)],
+                        ys[static_cast<std::size_t>(row + 1)]);
                 if (!active) {
                     continue;
                 }
@@ -480,11 +539,9 @@ std::vector<LayoutTable> build_tables_from_grid(
                      index < by_row[static_cast<std::size_t>(row)].size();
                      ++index) {
                     const int column = static_cast<int>(
-                        std::upper_bound(
-                            frame.xs.begin(),
-                            frame.xs.end(),
-                            word_columns[static_cast<std::size_t>(row)][index]) -
-                        frame.xs.begin()) - 1;
+                        std::upper_bound(xs.begin(), xs.end(),
+                                         word_columns[static_cast<std::size_t>(row)][index]) -
+                        xs.begin()) - 1;
                     if (column >= start && column <= end) {
                         cell_words.push_back(
                             by_row[static_cast<std::size_t>(row)][index]);
@@ -498,8 +555,8 @@ std::vector<LayoutTable> build_tables_from_grid(
             }
         }
         LayoutTable table;
-        table.columns = frame.xs;
-        table.rows = frame.ys;
+        table.columns = xs;
+        table.rows = ys;
         for (int row = 0; row < rows; ++row) {
             const RowCells& cells = row_cells[static_cast<std::size_t>(row)];
             if (cells.texts.empty()) {
