@@ -66,6 +66,14 @@ struct OcrRegionText {
     int bottom{0};
 };
 
+// Прямоугольник ячейки таблицы, найденный структурной моделью (SLANet).
+struct OcrTableNode {
+    int left{0};
+    int top{0};
+    int right{0};
+    int bottom{0};
+};
+
 // ISO-код приложения (en, zh, zt, ...) → код языка Tesseract (eng, chi_sim,
 // chi_tra, ...). Бросает std::runtime_error для неподдержанного языка.
 std::string tesseract_language_code(std::string_view code);

@@ -5011,6 +5011,93 @@ offline_translator::LayoutPage ocr_raster_page(
                 rotated_width * 4);
         auto page =
             offline_translator::build_layout_page(layout, grid_segments);
+        // Таблицы без линий: структуру ячеек даёт SLANet (если модель стоит).
+        // Включается переменной TLING_TABLE_SLANET=1: на страницах без
+        // настоящих таблиц модель склонна «выдумывать» ячейки.
+        const bool slanet_enabled = [] {
+            const char* env = std::getenv("TLING_TABLE_SLANET");
+            if (env == nullptr) {
+                return false;
+            }
+            const std::string value(env);
+            return value == "1" || value == "on" || value == "true";
+        }();
+        if (!config.output_png && slanet_enabled &&
+            offline_translator::ppocr_table_structure_installed()) {
+            offline_translator::app_log_info(
+                "SLANet: blocks=" + std::to_string(page.blocks.size()) +
+                " tables=" + std::to_string(page.tables.size()));
+            const auto block_covered = [&](const
+                                               offline_translator::LayoutBlock&
+                                                   block) {
+                const int cx = (block.left + block.right) / 2;
+                const int cy = (block.top + block.bottom) / 2;
+                for (const auto& table : page.tables) {
+                    if (table.columns.empty() || table.rows.empty()) {
+                        continue;
+                    }
+                    if (cx >= table.columns.front() &&
+                        cx <= table.columns.back() &&
+                        cy >= table.rows.front() &&
+                        cy <= table.rows.back()) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            for (const auto& block : page.blocks) {
+                if (!block.table || block_covered(block)) {
+                    continue;
+                }
+                std::size_t cell_count = 0;
+                int row_count = 0;
+                for (const auto& line : block.lines) {
+                    if (line.cells.size() >= 2) {
+                        ++row_count;
+                        cell_count += line.cells.size();
+                    }
+                }
+                if (row_count < 2 || cell_count < 4) {
+                    continue;
+                }
+                offline_translator::app_log_info(
+                    "SLANet: block rows=" + std::to_string(row_count) +
+                    " cells=" + std::to_string(cell_count));
+                const auto nodes =
+                    offline_translator::recognize_table_structure(
+                        offline_translator::default_ppocr_root(),
+                        grid_image,
+                        rotated_width,
+                        rotated_height,
+                        rotated_width * 4,
+                        4,
+                        {block.left - 4,
+                         block.top - 4,
+                         block.right + 4,
+                         block.bottom + 4});
+                auto table =
+                    offline_translator::build_layout_table_from_cells(
+                        nodes, layout);
+                offline_translator::app_log_info(
+                    "SLANet: nodes=" + std::to_string(nodes.size()) +
+                    " cells=" + std::to_string(table.texts.size()));
+                if (table.texts.empty()) {
+                    continue;
+                }
+                // Защита от «таблиц» из сплошного текста: в настоящей
+                // таблице большинство ячеек короткие.
+                std::size_t short_cells = 0;
+                for (const auto& text : table.texts) {
+                    if (text.text.size() <= 24) {
+                        ++short_cells;
+                    }
+                }
+                if (short_cells * 3 < table.texts.size() * 2) {
+                    continue;
+                }
+                page.tables.push_back(std::move(table));
+            }
+        }
         // Ячейки таблиц распознаём повторно по кропу: текст не «протекает»
         // между ячейками, вертикальные заголовки читаются лентой глифов.
         if (!config.output_png && !page.tables.empty()) {

@@ -73,6 +73,12 @@ struct LayoutTable {
     std::vector<LayoutTableText> texts;
 };
 
+// Собирает таблицу из произвольных прямоугольников ячеек (структурная
+// модель SLANet): сетка колонок/строк достраивается по краям ячеек.
+LayoutTable build_layout_table_from_cells(
+    const std::vector<OcrTableNode>& cells,
+    const OcrLayout& layout);
+
 struct LayoutPage {
     int width{0};
     int height{0};

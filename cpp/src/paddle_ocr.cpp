@@ -390,6 +390,8 @@ struct Session {
     OrtSession* session{nullptr};
     std::string input_name;
     std::string output_name;
+    // Второй выход (структурная модель таблиц): структура + координаты.
+    std::string output_name2;
 };
 
 struct SharedOrtEnv {
@@ -420,6 +422,7 @@ Session open_session(const std::filesystem::path& model_path) {
         options, static_cast<int>(std::max(1u, std::thread::hardware_concurrency())));
     ort()->SetSessionGraphOptimizationLevel(options, ORT_ENABLE_ALL);
     ort()->SetSessionExecutionMode(options, ORT_SEQUENTIAL);
+    ort()->SetSessionLogSeverityLevel(options, 3);
 
     Session result;
     ort_check(
@@ -449,6 +452,19 @@ Session open_session(const std::filesystem::path& model_path) {
     if (output_name != nullptr) {
         result.output_name = output_name;
         ort()->AllocatorFree(allocator, output_name);
+    }
+    // Структурные модели (SLANet) отдают два выхода.
+    std::size_t output_count = 0;
+    if (ort()->SessionGetOutputCount(result.session, &output_count) ==
+            nullptr &&
+        output_count >= 2) {
+        char* second_name = nullptr;
+        if (ort()->SessionGetOutputName(
+                result.session, 1, allocator, &second_name) == nullptr &&
+            second_name != nullptr) {
+            result.output_name2 = second_name;
+            ort()->AllocatorFree(allocator, second_name);
+        }
     }
     return result;
 }
@@ -529,6 +545,77 @@ std::vector<float> run_float(
     ort()->ReleaseValue(output_value);
     ort()->ReleaseMemoryInfo(memory);
     return result;
+}
+
+// Модель с двумя выходами (SLANet): структура и координаты ячеек.
+void run_two_outputs(
+    Session& session,
+    const std::vector<float>& input,
+    const std::vector<std::int64_t>& shape,
+    std::vector<float>* first,
+    std::vector<std::int64_t>* first_shape,
+    std::vector<float>* second,
+    std::vector<std::int64_t>* second_shape) {
+    OrtMemoryInfo* memory = nullptr;
+    ort_check(
+        ort()->CreateCpuMemoryInfo(
+            OrtArenaAllocator, OrtMemTypeDefault, &memory),
+        "CreateCpuMemoryInfo");
+    OrtValue* input_value = nullptr;
+    ort_check(
+        ort()->CreateTensorWithDataAsOrtValue(
+            memory,
+            const_cast<float*>(input.data()),
+            input.size() * sizeof(float),
+            shape.data(),
+            shape.size(),
+            ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+            &input_value),
+        "CreateTensorWithDataAsOrtValue");
+    const char* input_names[] = {session.input_name.c_str()};
+    const char* output_names[] = {
+        session.output_name.c_str(), session.output_name2.c_str()};
+    OrtValue* outputs[2] = {nullptr, nullptr};
+    ort_check(
+        ort()->Run(
+            session.session,
+            nullptr,
+            input_names,
+            &input_value,
+            1,
+            output_names,
+            2,
+            outputs),
+        "Run");
+    ort()->ReleaseValue(input_value);
+    for (int index = 0; index < 2; ++index) {
+        OrtTensorTypeAndShapeInfo* info = nullptr;
+        ort_check(
+            ort()->GetTensorTypeAndShape(outputs[index], &info),
+            "GetTensorTypeAndShape");
+        std::size_t rank = 0;
+        ort()->GetDimensionsCount(info, &rank);
+        std::array<std::int64_t, 8> dims{};
+        ort()->GetDimensions(
+            info, dims.data(), std::min<std::size_t>(rank, 8));
+        auto* target_shape = index == 0 ? first_shape : second_shape;
+        target_shape->assign(
+            dims.begin(), dims.begin() + std::min<std::size_t>(rank, 8));
+        ort()->ReleaseTensorTypeAndShapeInfo(info);
+        std::size_t total = 1;
+        for (const auto dim : *target_shape) {
+            total *= static_cast<std::size_t>(std::max<std::int64_t>(dim, 1));
+        }
+        float* raw = nullptr;
+        ort_check(
+            ort()->GetTensorMutableData(
+                outputs[index], reinterpret_cast<void**>(&raw)),
+            "GetTensorMutableData");
+        auto* target = index == 0 ? first : second;
+        target->assign(raw, raw + total);
+        ort()->ReleaseValue(outputs[index]);
+    }
+    ort()->ReleaseMemoryInfo(memory);
 }
 
 // --- нормализация ----------------------------------------------------------
@@ -1740,6 +1827,238 @@ std::vector<OcrRegionText> PaddleOcrEngine::recognize_regions(
         results.push_back(std::move(result));
     }
     return results;
+}
+
+namespace {
+
+// Классы структуры SLANet: sos + словарь из метаданных модели + eos.
+const std::vector<std::string>& table_tokens() {
+    static const std::vector<std::string> tokens = [] {
+        std::vector<std::string> list;
+        list.push_back("sos");
+        list.push_back("<thead>");
+        list.push_back("</thead>");
+        list.push_back("<tbody>");
+        list.push_back("</tbody>");
+        list.push_back("<tr>");
+        list.push_back("</tr>");
+        list.push_back("<td");
+        list.push_back(">");
+        list.push_back("</td>");
+        for (int span = 2; span <= 20; ++span) {
+            list.push_back(" colspan=\"" + std::to_string(span) + "\"");
+        }
+        for (int span = 2; span <= 20; ++span) {
+            list.push_back(" rowspan=\"" + std::to_string(span) + "\"");
+        }
+        list.push_back("<td></td>");
+        list.push_back("eos");
+        return list;
+    }();
+    return tokens;
+}
+
+bool is_table_cell_token(const std::string& token) {
+    return token == "<td" || token == "<td>" || token == "<td></td>";
+}
+
+// Область таблицы → нормализованный тензор 1x3x488x488 (BGR, ImageNet).
+bool make_table_tensor(
+    const Rgb& rgb,
+    const OcrRegion& region,
+    std::vector<float>* tensor,
+    int* crop_width,
+    int* crop_height) {
+    constexpr int kSize = 488;
+    const int left = std::clamp(region.left, 0, rgb.width - 1);
+    const int top = std::clamp(region.top, 0, rgb.height - 1);
+    const int right = std::clamp(region.right, 0, rgb.width - 1);
+    const int bottom = std::clamp(region.bottom, 0, rgb.height - 1);
+    const int width = right - left + 1;
+    const int height = bottom - top + 1;
+    if (width < 24 || height < 24) {
+        return false;
+    }
+    Rgb crop;
+    crop.width = width;
+    crop.height = height;
+    crop.pixels.resize(static_cast<std::size_t>(width) * height * 3);
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(
+            crop.pixels.data() + static_cast<std::size_t>(y) * width * 3,
+            rgb.pixels.data() +
+                static_cast<std::size_t>(top + y) * rgb.width * 3 +
+                static_cast<std::size_t>(left) * 3,
+            static_cast<std::size_t>(width) * 3);
+    }
+    const double ratio = static_cast<double>(kSize) /
+        std::max(width, height);
+    const int resized_w =
+        std::max(1, static_cast<int>(std::lround(width * ratio)));
+    const int resized_h =
+        std::max(1, static_cast<int>(std::lround(height * ratio)));
+    const Rgb resized = resize_rgb(crop, resized_w, resized_h);
+    tensor->assign(static_cast<std::size_t>(kSize) * kSize * 3, 0.0f);
+    const float mean[3] = {0.485f, 0.456f, 0.406f};
+    const float stdv[3] = {0.229f, 0.224f, 0.225f};
+    const float scale = 1.0f / 255.0f;
+    const std::size_t plane = static_cast<std::size_t>(kSize) * kSize;
+    for (int y = 0; y < resized_h; ++y) {
+        for (int x = 0; x < resized_w; ++x) {
+            const std::uint8_t* p = resized.pixels.data() +
+                (static_cast<std::size_t>(y) * resized.width + x) * 3;
+            // RapidTable подаёт BGR: канал 0 — синий.
+            const float values[3] = {p[2] * scale, p[1] * scale, p[0] * scale};
+            for (int c = 0; c < 3; ++c) {
+                (*tensor)[static_cast<std::size_t>(c) * plane +
+                          static_cast<std::size_t>(y) * kSize + x] =
+                    (values[c] - mean[c]) / stdv[c];
+            }
+        }
+    }
+    *crop_width = width;
+    *crop_height = height;
+    return true;
+}
+
+}  // пространство имён
+
+bool ppocr_table_structure_installed(const std::filesystem::path& root) {
+    const auto dir = root.empty() ? default_ppocr_root() : root;
+    if (dir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(dir / "table_slanet.onnx", ec) && !ec;
+}
+
+std::vector<OcrTableNode> recognize_table_structure(
+    const std::filesystem::path& root,
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel,
+    const OcrRegion& region) {
+    std::vector<OcrTableNode> nodes;
+    const auto dir = root.empty() ? default_ppocr_root() : root;
+    if (dir.empty()) {
+        return nodes;
+    }
+    std::error_code ec;
+    const auto model_path = dir / "table_slanet.onnx";
+    if (!std::filesystem::exists(model_path, ec) || ec) {
+        return nodes;
+    }
+    const Rgb rgb =
+        to_rgb(image, width, height, bytes_per_line, bytes_per_pixel);
+    std::vector<float> tensor;
+    int crop_width = 0;
+    int crop_height = 0;
+    if (!make_table_tensor(rgb, region, &tensor, &crop_width, &crop_height)) {
+        return nodes;
+    }
+    Session session = open_session(model_path);
+    if (session.session == nullptr || session.output_name2.empty()) {
+        close_session(session);
+        return nodes;
+    }
+    std::vector<std::int64_t> shape = {1, 3, 488, 488};
+    std::vector<float> first;
+    std::vector<float> second;
+    std::vector<std::int64_t> first_shape;
+    std::vector<std::int64_t> second_shape;
+    try {
+        run_two_outputs(
+            session,
+            tensor,
+            shape,
+            &first,
+            &first_shape,
+            &second,
+            &second_shape);
+    } catch (const std::exception&) {
+        close_session(session);
+        return nodes;
+    }
+    close_session(session);
+    // Выход 0 — координаты ячеек (последняя размерность 8), выход 1 —
+    // структура. На всякий случай определяем по форме.
+    const std::vector<float>* structure = &second;
+    const std::vector<std::int64_t>* structure_shape = &second_shape;
+    const std::vector<float>* boxes = &first;
+    const std::vector<std::int64_t>* boxes_shape = &first_shape;
+    if (first_shape.size() == 3 && first_shape[2] != 8 &&
+        second_shape.size() == 3 && second_shape[2] == 8) {
+        structure = &first;
+        structure_shape = &first_shape;
+        boxes = &second;
+        boxes_shape = &second_shape;
+    }
+    if (structure_shape->size() != 3 || boxes_shape->size() != 3) {
+        return nodes;
+    }
+    const int steps = static_cast<int>((*structure_shape)[1]);
+    const int classes = static_cast<int>((*structure_shape)[2]);
+    const int box_steps = static_cast<int>((*boxes_shape)[1]);
+    const int box_values = static_cast<int>((*boxes_shape)[2]);
+    if (steps <= 0 || classes <= 0 || box_values < 8) {
+        return nodes;
+    }
+    const auto& tokens = table_tokens();
+    // Ячейки предсказаны в нормализованном квадрате 488x488; длинная
+    // сторона области масштабируется в 488, значит коэффициент = max(w,h).
+    const double scale =
+        static_cast<double>(std::max(crop_width, crop_height));
+    for (int step = 0; step < steps; ++step) {
+        const float* row =
+            structure->data() + static_cast<std::size_t>(step) * classes;
+        int best = 0;
+        for (int c = 1; c < classes; ++c) {
+            if (row[c] > row[best]) {
+                best = c;
+            }
+        }
+        if (best <= 0) {
+            continue;
+        }
+        if (best >= static_cast<int>(tokens.size())) {
+            continue;
+        }
+        const std::string& token = tokens[static_cast<std::size_t>(best)];
+        if (token == "eos") {
+            break;
+        }
+        if (!is_table_cell_token(token) || step >= box_steps) {
+            continue;
+        }
+        const float* box =
+            boxes->data() + static_cast<std::size_t>(step) * box_values;
+        double min_x = box[0];
+        double max_x = box[0];
+        double min_y = box[1];
+        double max_y = box[1];
+        for (int point = 1; point < 4; ++point) {
+            const double x = box[point * 2];
+            const double y = box[point * 2 + 1];
+            min_x = std::min(min_x, x);
+            max_x = std::max(max_x, x);
+            min_y = std::min(min_y, y);
+            max_y = std::max(max_y, y);
+        }
+        OcrTableNode node;
+        node.left = region.left + static_cast<int>(std::lround(min_x * scale));
+        node.top = region.top + static_cast<int>(std::lround(min_y * scale));
+        node.right =
+            region.left + static_cast<int>(std::lround(max_x * scale));
+        node.bottom =
+            region.top + static_cast<int>(std::lround(max_y * scale));
+        if (node.right - node.left < 4 || node.bottom - node.top < 4) {
+            continue;
+        }
+        nodes.push_back(node);
+    }
+    return nodes;
 }
 
 }  // namespace offline_translator

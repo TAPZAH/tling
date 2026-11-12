@@ -639,6 +639,188 @@ std::vector<LayoutTable> build_tables_from_grid(
     return tables;
 }
 
+namespace {
+
+std::vector<int> cluster_edge_positions(
+    const std::vector<int>& values,
+    int tolerance) {
+    if (values.empty()) {
+        return {};
+    }
+    std::vector<int> sorted = values;
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<int> edges;
+    long long sum = sorted.front();
+    int count = 1;
+    int current = sorted.front();
+    for (std::size_t index = 1; index < sorted.size(); ++index) {
+        if (sorted[index] - current <= tolerance) {
+            sum += sorted[index];
+            ++count;
+            current = sorted[index];
+        } else {
+            edges.push_back(static_cast<int>(sum / count));
+            sum = sorted[index];
+            count = 1;
+            current = sorted[index];
+        }
+    }
+    edges.push_back(static_cast<int>(sum / count));
+    return edges;
+}
+
+int nearest_edge_index(const std::vector<int>& edges, int value) {
+    std::size_t best = 0;
+    int best_distance = 1 << 30;
+    for (std::size_t index = 0; index < edges.size(); ++index) {
+        const int distance = std::abs(edges[index] - value);
+        if (distance < best_distance) {
+            best_distance = distance;
+            best = index;
+        }
+    }
+    return static_cast<int>(best);
+}
+
+std::wstring join_box_words(const std::vector<const OcrWordBox*>& words) {
+    std::vector<const OcrWordBox*> sorted = words;
+    std::sort(
+        sorted.begin(),
+        sorted.end(),
+        [](const OcrWordBox* left, const OcrWordBox* right) {
+            if (left->line != right->line) {
+                return left->line < right->line;
+            }
+            return left->left < right->left;
+        });
+    std::wstring text;
+    int previous_line = -1000000;
+    for (const OcrWordBox* word : sorted) {
+        if (word->text.empty()) {
+            continue;
+        }
+        if (!text.empty()) {
+            text += word->line != previous_line ? L'\n' : L' ';
+        }
+        text += wide_text(word->text);
+        previous_line = word->line;
+    }
+    return text;
+}
+
+}  // пространство имён
+
+LayoutTable build_layout_table_from_cells(
+    const std::vector<OcrTableNode>& cells,
+    const OcrLayout& layout) {
+    LayoutTable table;
+    if (cells.size() < 2 || layout.words.empty()) {
+        return table;
+    }
+    int max_x = -1;
+    int max_y = -1;
+    std::vector<int> xs_values;
+    std::vector<int> ys_values;
+    xs_values.reserve(cells.size() * 2);
+    ys_values.reserve(cells.size() * 2);
+    for (const auto& cell : cells) {
+        max_x = std::max(max_x, cell.right);
+        max_y = std::max(max_y, cell.bottom);
+        xs_values.push_back(cell.left);
+        xs_values.push_back(cell.right);
+        ys_values.push_back(cell.top);
+        ys_values.push_back(cell.bottom);
+    }
+    const int tolerance =
+        std::max(10, std::max(max_x, max_y) / 120);
+    table.columns = cluster_edge_positions(xs_values, tolerance);
+    table.rows = cluster_edge_positions(ys_values, tolerance);
+    if (table.columns.size() < 2 || table.rows.size() < 2) {
+        return LayoutTable{};
+    }
+    const int rows = static_cast<int>(table.rows.size()) - 1;
+    const int columns = static_cast<int>(table.columns.size()) - 1;
+    std::vector<std::vector<bool>> used(
+        static_cast<std::size_t>(rows),
+        std::vector<bool>(static_cast<std::size_t>(columns), false));
+    for (const auto& cell : cells) {
+        const int column = nearest_edge_index(table.columns, cell.left);
+        const int column_end = nearest_edge_index(table.columns, cell.right);
+        const int row = nearest_edge_index(table.rows, cell.top);
+        const int row_end = nearest_edge_index(table.rows, cell.bottom);
+        if (column_end <= column || row_end <= row ||
+            column < 0 || row < 0 || column_end > columns ||
+            row_end > rows) {
+            continue;
+        }
+        bool occupied = false;
+        for (int r = row; r < row_end && !occupied; ++r) {
+            for (int c = column; c < column_end; ++c) {
+                if (used[static_cast<std::size_t>(r)]
+                        [static_cast<std::size_t>(c)]) {
+                    occupied = true;
+                    break;
+                }
+            }
+        }
+        if (occupied) {
+            continue;
+        }
+        std::vector<const OcrWordBox*> inside;
+        for (const auto& word : layout.words) {
+            if (word.text.empty()) {
+                continue;
+            }
+            const int cx = word.left + word.width / 2;
+            const int cy = word.top + word.height / 2;
+            if (cx >= cell.left && cx <= cell.right && cy >= cell.top &&
+                cy <= cell.bottom) {
+                inside.push_back(&word);
+            }
+        }
+        if (inside.empty()) {
+            continue;
+        }
+        for (int r = row; r < row_end; ++r) {
+            for (int c = column; c < column_end; ++c) {
+                used[static_cast<std::size_t>(r)]
+                    [static_cast<std::size_t>(c)] = true;
+            }
+        }
+        LayoutTableText text;
+        text.text = join_box_words(inside);
+        if (text.text.empty()) {
+            continue;
+        }
+        text.row = row;
+        text.column = column;
+        text.row_span = row_end - row;
+        text.column_span = column_end - column;
+        std::vector<int> heights;
+        int left = 1 << 30;
+        int top = 1 << 30;
+        int right = -1;
+        int bottom = -1;
+        for (const OcrWordBox* word : inside) {
+            heights.push_back(word->height);
+            left = std::min(left, word->left);
+            top = std::min(top, word->top);
+            right = std::max(right, word->left + word->width);
+            bottom = std::max(bottom, word->top + word->height);
+        }
+        text.font_height = std::max(median(heights), 1);
+        text.left = left;
+        text.top = top;
+        text.right = right;
+        text.bottom = bottom;
+        table.texts.push_back(std::move(text));
+    }
+    if (table.texts.size() < 2) {
+        return LayoutTable{};
+    }
+    return table;
+}
+
 bool line_inside_table(const LayoutPage& page, const LayoutLine& line) {
     const int cx = (line.left + line.right) / 2;
     const int cy = (line.top + line.bottom) / 2;

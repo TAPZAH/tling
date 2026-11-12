@@ -46,6 +46,19 @@ void download_ppocr_server_det(
     const ProgressCallback& progress = {},
     const std::filesystem::path& root = {});
 
+// Структурная модель таблиц SLANet (table_slanet.onnx, ~7 МБ).
+bool ppocr_table_structure_installed(const std::filesystem::path& root = {});
+// Разметка табличной области: ячейки в пикселях исходного изображения.
+// region — предполагаемая область таблицы (например, блок текста).
+std::vector<OcrTableNode> recognize_table_structure(
+    const std::filesystem::path& root,
+    const std::uint8_t* image,
+    int width,
+    int height,
+    int bytes_per_line,
+    int bytes_per_pixel,
+    const OcrRegion& region);
+
 // OCR на моделях PaddleOCR (PP-OCR) через ONNX Runtime. Детектор текстовых
 // регионов (DBNet) + CTC-распознаватель по скрипту. Не потокобезопасен.
 class PaddleOcrEngine {
