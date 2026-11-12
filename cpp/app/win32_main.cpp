@@ -934,7 +934,13 @@ void apply_ocr_backend_from_settings(
         backend = offline_translator::OcrBackend::Paddle;
     }
     offline_translator::set_ocr_backend(backend, ppocr_root);
-    offline_translator::set_ppocr_accurate(settings.ocr_quality == "accurate");
+    // Пустое значение (старые settings.json) не перебивает переменную
+    // окружения TLING_OCR_ACCURATE.
+    if (settings.ocr_quality == "accurate") {
+        offline_translator::set_ppocr_accurate(true);
+    } else if (settings.ocr_quality == "fast") {
+        offline_translator::set_ppocr_accurate(false);
+    }
     offline_translator::app_log_info(
         std::string("OCR backend: ") +
         (backend == offline_translator::OcrBackend::Paddle ? "paddle"
@@ -5083,15 +5089,18 @@ offline_translator::LayoutPage ocr_raster_page(
                 if (table.texts.empty()) {
                     continue;
                 }
-                // Защита от «таблиц» из сплошного текста: в настоящей
-                // таблице большинство ячеек короткие.
-                std::size_t short_cells = 0;
+                // Защита от «таблиц» из сплошного текста: медианная ячейка
+                // настоящей таблицы короткая, а у письма — длинные абзацы.
+                std::vector<int> lengths;
+                lengths.reserve(table.texts.size());
                 for (const auto& text : table.texts) {
-                    if (text.text.size() <= 24) {
-                        ++short_cells;
-                    }
+                    lengths.push_back(static_cast<int>(text.text.size()));
                 }
-                if (short_cells * 3 < table.texts.size() * 2) {
+                if (lengths.size() < 4) {
+                    continue;
+                }
+                std::sort(lengths.begin(), lengths.end());
+                if (lengths[lengths.size() / 2] > 24) {
                     continue;
                 }
                 page.tables.push_back(std::move(table));
@@ -5143,6 +5152,7 @@ offline_translator::LayoutPage ocr_raster_page(
                     rotated_width * 4,
                     4,
                     regions);
+                int replaced = 0;
                 for (std::size_t index = 0;
                      index < recognized.size() && index < refs.size();
                      ++index) {
@@ -5152,8 +5162,42 @@ offline_translator::LayoutPage ocr_raster_page(
                     }
                     auto& text = page.tables[refs[index].first]
                                      .texts[refs[index].second];
+                    // Распознаватель на широкой ячейке иногда теряет пробелы;
+                    // не затираем исходный текст, если он был с пробелами.
+                    const bool new_spaceless =
+                        result.text.find(' ') == std::string::npos;
+                    const bool old_spaced =
+                        text.text.find(L' ') != std::wstring::npos;
+                    if (new_spaceless && old_spaced &&
+                        text.text.size() > 24) {
+                        continue;
+                    }
                     text.text = from_utf8(result.text);
+                    ++replaced;
+                    // Геометрию берём из самой ячейки сетки, если у текста
+                    // она не заполнена (иначе размеры шрифта/фона ломаются).
+                    if (text.right <= text.left || text.bottom <= text.top) {
+                        const auto& table = page.tables[refs[index].first];
+                        const int column_end =
+                            text.column + text.column_span;
+                        const int row_end = text.row + text.row_span;
+                        if (column_end <
+                                static_cast<int>(table.columns.size()) &&
+                            row_end < static_cast<int>(table.rows.size())) {
+                            text.left = table.columns[static_cast<std::size_t>(
+                                text.column)];
+                            text.top = table.rows[static_cast<std::size_t>(
+                                text.row)];
+                            text.right = table.columns[static_cast<std::size_t>(
+                                column_end)];
+                            text.bottom = table.rows[static_cast<std::size_t>(
+                                row_end)];
+                        }
+                    }
                 }
+                offline_translator::app_log_info(
+                    "ячейки: распознано " + std::to_string(replaced) +
+                    " из " + std::to_string(regions.size()));
             }
         }
         return page;
@@ -10441,6 +10485,120 @@ int WINAPI wWinMain(
         " auto_copy=" + std::to_string(settings.auto_copy_selection) +
         " result=" + settings.result_window_mode +
         " theme=" + settings.ui_theme);
+    // Скрытый режим диагностики разметки (без перевода):
+    //   TLing --layout-dump <вход> <выход.txt>
+    if (command_has_flag(GetCommandLineW(), L"--layout-dump")) {
+        int argument_count = 0;
+        LPWSTR* arguments =
+            CommandLineToArgvW(GetCommandLineW(), &argument_count);
+        std::filesystem::path input;
+        std::filesystem::path output;
+        if (arguments != nullptr) {
+            for (int index = 0; index < argument_count; ++index) {
+                if (_wcsicmp(arguments[index], L"--layout-dump") != 0) {
+                    continue;
+                }
+                for (int next = index + 1; next < argument_count; ++next) {
+                    if (std::wstring_view(arguments[next]).rfind(L"--", 0) == 0) {
+                        continue;
+                    }
+                    if (input.empty()) {
+                        input = arguments[next];
+                    } else {
+                        output = arguments[next];
+                        break;
+                    }
+                }
+                break;
+            }
+            LocalFree(arguments);
+        }
+        if (input.empty() || output.empty()) {
+            return 2;
+        }
+        Gdiplus::GdiplusStartupInput gdiplus_input{};
+        ULONG_PTR gdiplus_token = 0;
+        const bool gdiplus_ready =
+            Gdiplus::GdiplusStartup(&gdiplus_token, &gdiplus_input, nullptr) ==
+            Gdiplus::Ok;
+        int dump_result = 0;
+        try {
+            ExcelJobConfig config;
+            config.engine =
+                offline_translator::engine_kind_from_settings(settings.engine);
+            config.models_root = model_root_for_kind(config.engine);
+            config.target = settings.target_language;
+            config.fallback_target = settings.fallback_target_language;
+            config.source_path = input;
+            config.ocr_languages = current_ocr_languages();
+            offline_translator::OcrEngine ocr;
+            ocr.initialize_multi(config.ocr_languages);
+            auto loaded = offline_translator::load_image_file(input);
+            if (!loaded) {
+                offline_translator::app_log_warn(
+                    "layout-dump: не удалось прочитать изображение");
+                dump_result = 1;
+            } else {
+                auto page = ocr_raster_page(
+                    ocr, config, loaded->bgra, loaded->width, loaded->height);
+                std::ofstream dump(output, std::ios::binary);
+                dump << "page=" << page.width << "x" << page.height << "\n";
+                dump << "tables=" << page.tables.size() << "\n";
+                dump << "blocks=" << page.blocks.size() << "\n";
+                for (std::size_t table_index = 0;
+                     table_index < page.tables.size();
+                     ++table_index) {
+                    const auto& table = page.tables[table_index];
+                    dump << "table " << table_index << " rows="
+                         << (table.rows.size() - 1) << " cols="
+                         << (table.columns.size() - 1) << " x="
+                         << (table.columns.empty() ? 0 : table.columns.front())
+                         << ".."
+                         << (table.columns.empty() ? 0 : table.columns.back())
+                         << " y="
+                         << (table.rows.empty() ? 0 : table.rows.front())
+                         << ".."
+                         << (table.rows.empty() ? 0 : table.rows.back())
+                         << "\n";
+                    for (const auto& text : table.texts) {
+                        dump << "c " << text.row << " " << text.column << " "
+                             << text.row_span << " " << text.column_span << " "
+                             << text.left << " " << text.top << " "
+                             << text.right << " " << text.bottom << " | "
+                             << to_utf8(text.text) << "\n";
+                    }
+                }
+                for (const auto& block : page.blocks) {
+                    dump << "block left=" << block.left
+                         << " top=" << block.top << " right=" << block.right
+                         << " bottom=" << block.bottom
+                         << " table=" << (block.table ? 1 : 0) << "\n";
+                    for (const auto& line : block.lines) {
+                        dump << "l " << line.left << " " << line.top << " "
+                             << line.right << " " << line.bottom << " | ";
+                        for (std::size_t cell_index = 0;
+                             cell_index < line.cells.size();
+                             ++cell_index) {
+                            if (cell_index != 0) {
+                                dump << " || ";
+                            }
+                            dump << to_utf8(line.cells[cell_index].text);
+                        }
+                        dump << "\n";
+                    }
+                }
+            }
+        } catch (const std::exception& error) {
+            offline_translator::app_log_warn(
+                std::string("layout-dump: ") + error.what());
+            dump_result = 1;
+        }
+        if (gdiplus_ready) {
+            Gdiplus::GdiplusShutdown(gdiplus_token);
+        }
+        return dump_result;
+    }
+
     // Скрытый режим: перевод документа/PDF из консоли (отладка и пакетная
     // обработка): TLing --translate-document <вход> <выход>.
     if (command_has_flag(command_line, L"--translate-document") ||

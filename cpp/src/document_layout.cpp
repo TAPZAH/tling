@@ -611,9 +611,8 @@ std::vector<LayoutTable> build_tables_from_grid(
                 for (const auto* word : by_row[static_cast<std::size_t>(row)]) {
                     const int cx = (word->left + word->right) / 2;
                     const int column = static_cast<int>(
-                        std::upper_bound(
-                            frame.xs.begin(), frame.xs.end(), cx) -
-                        frame.xs.begin()) - 1;
+                        std::upper_bound(xs.begin(), xs.end(), cx) -
+                        xs.begin()) - 1;
                     if (column < cells.starts[cell_index] ||
                         column > cells.ends[cell_index]) {
                         continue;
@@ -1251,6 +1250,39 @@ LayoutPage build_layout_page(const OcrLayout& layout, const GridSegments& grid) 
         words.push_back(std::move(info));
     }
     page.tables = build_tables_from_grid(grid, words);
+    // Рамка/линейки на всю страницу не должны превращать текст в таблицу:
+    // если таблица занимает почти всю страницу и ячейки — длинные строки,
+    // это не таблица, а абзацы (иначе они выпадут из перевода).
+    if (layout.width > 0 && layout.height > 0) {
+        for (auto it = page.tables.begin(); it != page.tables.end();) {
+            const int width = it->columns.empty()
+                ? 0
+                : it->columns.back() - it->columns.front();
+            const int height = it->rows.empty()
+                ? 0
+                : it->rows.back() - it->rows.front();
+            const bool page_sized =
+                static_cast<long long>(width) * height * 100 >=
+                static_cast<long long>(layout.width) * layout.height * 85;
+            std::vector<int> lengths;
+            lengths.reserve(it->texts.size());
+            for (const auto& text : it->texts) {
+                lengths.push_back(static_cast<int>(text.text.size()));
+            }
+            int median_length = 0;
+            if (!lengths.empty()) {
+                std::sort(lengths.begin(), lengths.end());
+                median_length = lengths[lengths.size() / 2];
+            }
+            const bool sparse_text = it->texts.size() < 6;
+            if ((median_length > 45 && !page_sized) ||
+                (page_sized && sparse_text)) {
+                it = page.tables.erase(it);
+                continue;
+            }
+            ++it;
+        }
+    }
     return page;
 }
 
