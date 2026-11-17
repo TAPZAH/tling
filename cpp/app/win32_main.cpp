@@ -143,6 +143,9 @@ constexpr int kResultAddButton = 1305;
 constexpr int kResultOriginalButton = 1306;
 constexpr int kUpdateYesButton = 1401;
 constexpr int kUpdateNoButton = 1402;
+// Пункты меню правой кнопки плавающей кнопки: выбор режима.
+constexpr int kFloatModeTranslate = 1450;
+constexpr int kFloatModeOcr = 1451;
 constexpr int kScreenOcrButton = 1010;
 constexpr int kImageButton = 1012;
 constexpr int kScreenOcrHotkey = 2002;
@@ -2578,59 +2581,26 @@ void refresh_tray_icon() {
     }
 }
 
+// Обе всплывающие кнопки (у курсора и плавающая) рисуют иконку ярлыка
+// с рабочего стола: PNG, с запасными вариантами app.ico и тема.
 std::wstring find_selection_icon_path() {
-    return find_theme_icon_path();
-}
-
-// Повторяет _fill_clickable_disk() из selection_button.py: находит радиус
-// знака по непрозрачным пикселям и заливает прозрачные точки внутри круга
-// белым, чтобы клик в центр не проваливался сквозь layered-окно.
-void fill_clickable_disk(Gdiplus::BitmapData& data, int alpha_limit) {
-    const int width = static_cast<int>(data.Width);
-    const int height = static_cast<int>(data.Height);
-    auto* pixels = static_cast<std::uint32_t*>(data.Scan0);
-    const double center_x = (width - 1) / 2.0;
-    const double center_y = (height - 1) / 2.0;
-    double radius_sq = 0.0;
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            const std::uint32_t argb =
-                pixels[y * (data.Stride / 4) + x];
-            if (((argb >> 24) & 0xFF) < alpha_limit) {
-                continue;
-            }
-            const double dx = x - center_x;
-            const double dy = y - center_y;
-            radius_sq = std::max(radius_sq, dx * dx + dy * dy);
-        }
+    std::wstring path = find_asset_file(L"icon.png");
+    if (path.empty()) {
+        path = find_app_icon_path();
     }
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            std::uint32_t& argb = pixels[y * (data.Stride / 4) + x];
-            if (((argb >> 24) & 0xFF) >= alpha_limit) {
-                continue;
-            }
-            const double dx = x - center_x;
-            const double dy = y - center_y;
-            if (dx * dx + dy * dy <= radius_sq) {
-                argb = 0xFFFFFFFF;
-            } else {
-                argb = 0;
-            }
-        }
+    if (path.empty()) {
+        path = find_theme_icon_path();
     }
+    return path;
 }
 
 // Готовит 40?40 premultiplied-DIB из переданного файла иконки для
 // UpdateLayeredWindow. Возвращает true, если иконка загружена.
-// clickable == true: прозрачные точки внутри значка заливаются белым,
-// чтобы клик в центр не проваливался сквозь layered-окно (кнопка у
-// курсора). clickable == false: прозрачность исходника сохраняется,
-// пустым пикселям ставится минимальная альфа — окно ловит мышь всей
-// площадью, но выглядит точно как картинка на рабочем столе.
+// Прозрачность исходника сохраняется, но пустым пикселям ставится
+// минимальная альфа: окно ловит мышь всей площадью, а выглядит точно
+// как картинка на рабочем столе.
 bool compose_icon_bitmap(
     const std::wstring& path,
-    bool clickable,
     HBITMAP* out_bitmap) {
     *out_bitmap = nullptr;
     if (path.empty()) {
@@ -2675,17 +2645,13 @@ bool compose_icon_bitmap(
             &data) != Gdiplus::Ok) {
         return false;
     }
-    if (clickable) {
-        fill_clickable_disk(data, 80);
-    } else {
-        auto* floor_pixels = static_cast<std::uint32_t*>(data.Scan0);
-        for (int y = 0; y < static_cast<int>(data.Height); ++y) {
-            for (int x = 0; x < static_cast<int>(data.Width); ++x) {
-                std::uint32_t& argb = floor_pixels[y * (data.Stride / 4) + x];
-                if (((argb >> 24) & 0xFF) < 2) {
-                    // Невидимая, но «кликами ловящая» подложка.
-                    argb = 0x01000000U;
-                }
+    auto* floor_pixels = static_cast<std::uint32_t*>(data.Scan0);
+    for (int y = 0; y < static_cast<int>(data.Height); ++y) {
+        for (int x = 0; x < static_cast<int>(data.Width); ++x) {
+            std::uint32_t& argb = floor_pixels[y * (data.Stride / 4) + x];
+            if (((argb >> 24) & 0xFF) < 2) {
+                // Невидимая, но «кликами ловящая» подложка.
+                argb = 0x01000000U;
             }
         }
     }
@@ -2748,21 +2714,14 @@ bool compose_icon_bitmap(
     return true;
 }
 
-// Кнопка у курсора: тематическая иконка-значок с белой подложкой.
+// Кнопка у курсора: иконка с рабочего стола.
 bool compose_selection_icon_bitmap(HBITMAP* out_bitmap) {
-    return compose_icon_bitmap(find_selection_icon_path(), true, out_bitmap);
+    return compose_icon_bitmap(find_selection_icon_path(), out_bitmap);
 }
 
-// Плавающая кнопка: та же иконка, что у ярлыка на рабочем столе.
+// Плавающая кнопка: та же десктопная иконка.
 bool compose_float_button_icon_bitmap(HBITMAP* out_bitmap) {
-    std::wstring path = find_asset_file(L"icon.png");
-    if (path.empty()) {
-        path = find_app_icon_path();
-    }
-    if (path.empty()) {
-        path = find_selection_icon_path();
-    }
-    return compose_icon_bitmap(path, false, out_bitmap);
+    return compose_selection_icon_bitmap(out_bitmap);
 }
 
 // Показывает иконку как layered-окно в точке (x, y).
@@ -2873,6 +2832,10 @@ const wchar_t* tray_menu_label(UINT id) {
         case kTrayFloatButton:
             return L"Плавающая кнопка";
         case kTrayOcrOnly:
+            return L"Только OCR";
+        case kFloatModeTranslate:
+            return L"Перевод";
+        case kFloatModeOcr:
             return L"Только OCR";
         case kTrayExit:
             return L"Выход";
@@ -3060,7 +3023,7 @@ void draw_tray_glyph(HDC dc, const RECT& box, UINT id, COLORREF color) {
     } else if (id == kTrayAutoCopy) {
         rect16(2, 2, 9, 10);
         rect16(5, 5, 13, 13);
-    } else if (id == kTrayFloatButton) {
+    } else if (id == kTrayFloatButton || id == kFloatModeTranslate) {
         POINT arrow[] = {
             {x + 4, y + 1},
             {x + 4, y + 13},
@@ -3079,7 +3042,7 @@ void draw_tray_glyph(HDC dc, const RECT& box, UINT id, COLORREF color) {
         DeleteObject(null_pen);
         SelectObject(dc, previous);
         DeleteObject(fill);
-    } else if (id == kTrayOcrOnly) {
+    } else if (id == kTrayOcrOnly || id == kFloatModeOcr) {
         rect16(3, 2, 12, 14);
         line(5, 6, 10, 6);
         line(5, 8, 10, 8);
@@ -5709,17 +5672,12 @@ void start_image_region_translation(HWND window) {
 // Плавающая кнопка: перетащите на неё файл изображения.
 constexpr wchar_t kFloatButtonClass[] = L"TLingImageFloatButton";
 
-// Переключает сеансовый режим «перевод» <-> «только распознавание (OCR)».
-// confirm_box == true — поведение меню трея: режим действует до перезапуска,
-// о чём сообщает диалог. Для плавающей кнопки достаточно строки состояния
-// и всплывающего сообщения, диалог не показываем.
-void toggle_ocr_only(HWND window, bool confirm_box) {
+// Сеансовый переключатель «Только OCR» из меню трея: действует до
+// перезапуска, о чём сообщает диалог (если настройка «всегда» не включена).
+void toggle_ocr_only(HWND window) {
     const bool enable = !g_ocr_only_session;
     g_ocr_only_session = enable;
-    const std::wstring on_text = L"Режим «Только OCR» включён (до перезапуска)";
-    const std::wstring off_text = L"Режим «Только OCR» выключен";
-    if (enable && confirm_box &&
-        !(g_runtime && g_runtime->settings.ocr_only)) {
+    if (enable && !(g_runtime && g_runtime->settings.ocr_only)) {
         localized_message_box(
             window,
             L"Режим «Только OCR» включён до перезапуска программы.\n\n"
@@ -5728,9 +5686,83 @@ void toggle_ocr_only(HWND window, bool confirm_box) {
             L"Только OCR",
             MB_ICONINFORMATION | MB_OK);
     }
-    set_status(enable ? on_text : off_text);
-    if (!confirm_box && !g_smoke_mode && g_tray_added) {
-        show_tray_balloon(L"TLing", enable ? on_text : off_text, false);
+    set_status(enable
+        ? L"Режим «Только OCR» включён (до перезапуска)"
+        : L"Режим «Только OCR» выключен");
+}
+
+// Применяет режим, выбранный в меню правой кнопки плавающей кнопки.
+// «Перевод» снимает и сеансовый флаг, и постоянную настройку
+// «Только OCR всегда» — иначе явный выбор пользователя не сработает.
+void set_ocr_mode(HWND window, bool ocr) {
+    if (ocr) {
+        g_ocr_only_session = true;
+    } else {
+        g_ocr_only_session = false;
+        if (g_runtime && g_runtime->settings.ocr_only) {
+            offline_translator::AppSettings snapshot;
+            update_runtime_settings(
+                [&snapshot](offline_translator::AppSettings& settings) {
+                    settings.ocr_only = false;
+                    snapshot = settings;
+                });
+            try {
+                offline_translator::save_settings(snapshot);
+            } catch (const std::exception&) {
+            }
+            if (g_settings_ocr_only && IsWindow(g_settings_ocr_only)) {
+                SendMessageW(
+                    g_settings_ocr_only,
+                    BM_SETCHECK,
+                    BST_UNCHECKED,
+                    0);
+            }
+        }
+    }
+    set_status(ocr
+        ? L"Режим: только распознавание (OCR)"
+        : L"Режим: перевод");
+}
+
+// Меню правой кнопки плавающей кнопки: выбор режима «перевод» или
+// «только OCR»; галочкой отмечен активный. Оформление общее с меню трея
+// (owner-draw рисует главное окно).
+void show_float_mode_menu(HWND owner) {
+    HMENU menu = CreatePopupMenu();
+    if (!menu) {
+        return;
+    }
+    const bool ocr = ocr_only_active();
+    AppendMenuW(
+        menu,
+        MF_OWNERDRAW | (ocr ? 0u : MF_CHECKED),
+        kFloatModeTranslate,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kFloatModeTranslate)));
+    AppendMenuW(
+        menu,
+        MF_OWNERDRAW | (ocr ? MF_CHECKED : 0u),
+        kFloatModeOcr,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kFloatModeOcr)));
+    MENUINFO info{};
+    info.cbSize = sizeof(info);
+    info.fMask = MIM_BACKGROUND;
+    info.hbrBack = theme_background_brush();
+    SetMenuInfo(menu, &info);
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    SetForegroundWindow(owner);
+    const LRESULT choice = TrackPopupMenuEx(
+        menu,
+        TPM_RIGHTBUTTON | TPM_TOPALIGN | TPM_RETURNCMD,
+        cursor.x,
+        cursor.y,
+        owner,
+        nullptr);
+    DestroyMenu(menu);
+    if (choice == kFloatModeOcr) {
+        set_ocr_mode(owner, true);
+    } else if (choice == kFloatModeTranslate) {
+        set_ocr_mode(owner, false);
     }
 }
 
@@ -5777,8 +5809,8 @@ LRESULT CALLBACK float_button_proc_impl(
         return 0;
     }
     if (message == WM_NCRBUTTONUP && g_runtime) {
-        // Правый клик: переключить режим «перевод / только OCR».
-        toggle_ocr_only(g_runtime->main_window, false);
+        // Правый клик: окошко выбора режима «перевод» / «только OCR».
+        show_float_mode_menu(g_runtime->main_window);
         return 0;
     }
     if (message == WM_DROPFILES) {
@@ -9707,7 +9739,7 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
             return 0;
         }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayOcrOnly) {
-            toggle_ocr_only(window, true);
+            toggle_ocr_only(window);
             return 0;
         }
         if (message == kUpdateCheckDoneMessage) {
