@@ -146,6 +146,7 @@ constexpr int kUpdateNoButton = 1402;
 // Пункты меню правой кнопки плавающей кнопки: выбор режима.
 constexpr int kFloatModeTranslate = 1450;
 constexpr int kFloatModeOcr = 1451;
+constexpr int kFloatModeHide = 1452;
 constexpr int kScreenOcrButton = 1010;
 constexpr int kImageButton = 1012;
 constexpr int kScreenOcrHotkey = 2002;
@@ -2837,6 +2838,8 @@ const wchar_t* tray_menu_label(UINT id) {
             return L"Перевод";
         case kFloatModeOcr:
             return L"Только OCR";
+        case kFloatModeHide:
+            return L"Убрать кнопку";
         case kTrayExit:
             return L"Выход";
         case kTrayTranslateRoot:
@@ -3042,6 +3045,10 @@ void draw_tray_glyph(HDC dc, const RECT& box, UINT id, COLORREF color) {
         DeleteObject(null_pen);
         SelectObject(dc, previous);
         DeleteObject(fill);
+    } else if (id == kFloatModeHide) {
+        rect16(3, 3, 12, 12);
+        line(5, 5, 10, 10);
+        line(10, 5, 5, 10);
     } else if (id == kTrayOcrOnly || id == kFloatModeOcr) {
         rect16(3, 2, 12, 14);
         line(5, 6, 10, 6);
@@ -5743,6 +5750,12 @@ void show_float_mode_menu(HWND owner) {
         MF_OWNERDRAW | (ocr ? MF_CHECKED : 0u),
         kFloatModeOcr,
         reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kFloatModeOcr)));
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(
+        menu,
+        MF_OWNERDRAW,
+        kFloatModeHide,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kFloatModeHide)));
     MENUINFO info{};
     info.cbSize = sizeof(info);
     info.fMask = MIM_BACKGROUND;
@@ -5763,6 +5776,14 @@ void show_float_mode_menu(HWND owner) {
         set_ocr_mode(owner, true);
     } else if (choice == kFloatModeTranslate) {
         set_ocr_mode(owner, false);
+    } else if (choice == kFloatModeHide) {
+        // Меню крутится внутри wndproc самой кнопки: уничтожать её
+        // напрямую нельзя — поручаем это главному окну сообщением.
+        PostMessageW(
+            owner,
+            WM_COMMAND,
+            MAKEWPARAM(kFloatModeHide, 0),
+            0);
     }
 }
 
@@ -9740,6 +9761,11 @@ if (message == WM_COMMAND && LOWORD(w_param) == kTrayCheckUpdate) {
         }
         if (message == WM_COMMAND && LOWORD(w_param) == kTrayOcrOnly) {
             toggle_ocr_only(window);
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(w_param) == kFloatModeHide) {
+            // Пункт «Убрать кнопку» из меню плавающей кнопки.
+            show_float_button(false);
             return 0;
         }
         if (message == kUpdateCheckDoneMessage) {

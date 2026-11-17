@@ -1,5 +1,5 @@
 // Испанский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 222> kStringsEs{{
+constexpr std::array<Pair, 223> kStringsEs{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copiar autom\u00e1ticamente el texto seleccionado al portapapeles"},
     {L"Автор: ", L"Autor: "},
     {L"Версия: ", L"Versi\u00f3n: "},
@@ -211,6 +211,7 @@ constexpr std::array<Pair, 222> kStringsEs{{
     {L"Автокопирование", L"Copiado autom\u00e1tico"},
     {L"Турбо перевод", L"Traducci\u00f3n turbo"},
     {L"Плавающая кнопка", L"Bot\u00f3n flotante"},
+    {L"Убрать кнопку", L"Quitar el bot\u00f3n"},
     {L"Только OCR", L"Solo OCR"},
     {L"Настройки…", L"Configuraci\u00f3n\u2026"},
     {L"Область экрана…", L"\u00c1rea de pantalla\u2026"},

@@ -1,5 +1,5 @@
 // Французский словарь интерфейса (ключи — русские строки).
-constexpr std::array<Pair, 222> kStringsFr{{
+constexpr std::array<Pair, 223> kStringsFr{{
     {L"Автоматически копировать выделенный текст в буфер обмена", L"Copier automatiquement le texte s\u00e9lectionn\u00e9 dans le presse-papiers"},
     {L"Автор: ", L"Auteur : "},
     {L"Версия: ", L"Version : "},
@@ -211,6 +211,7 @@ constexpr std::array<Pair, 222> kStringsFr{{
     {L"Автокопирование", L"Copie automatique"},
     {L"Турбо перевод", L"Traduction turbo"},
     {L"Плавающая кнопка", L"Bouton flottant"},
+    {L"Убрать кнопку", L"Retirer le bouton"},
     {L"Только OCR", L"OCR uniquement"},
     {L"Настройки…", L"Param\u00e8tres\u2026"},
     {L"Область экрана…", L"Zone d'\u00e9cran\u2026"},
