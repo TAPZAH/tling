@@ -201,7 +201,7 @@ constexpr std::array<Pair, 222> kStringsDe{{
     {L"Уже перевожу изображение…", L"Bild wird bereits \u00fcbersetzt\u2026"},
     {L"Текст на изображении не найден", L"Kein Text im Bild gefunden"},
     {L"Не удалось прочитать изображение", L"Bild konnte nicht gelesen werden"},
-    {L"Перетащите файл сюда или дважды кликните", L"Datei hierher ziehen oder doppelklicken"},
+    {L"Двойной клик — распознавание экрана, правый клик — режим перевод/OCR, перетащите файл сюда", L"Doppelklick startet Bildschirm-Erkennung, Rechtsklick wechselt \u00dcbersetzen/OCR, Datei hierher ziehen"},
     {L"Изображение с переводом", L"Bild mit \u00dcbersetzung"},
     {L"Изображения и PDF", L"Bilder und PDF"},
     {L"Перевожу документ…", L"Dokument wird \u00fcbersetzt\u2026"},
